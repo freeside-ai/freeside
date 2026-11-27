@@ -38,7 +38,11 @@ struct NotificationsPane: View {
                         }
                     }
                     if client != .mac, device.notificationsEnabled, let subscription = model.notificationSubscription {
-                        PhoneNotificationSetup(subscription: subscription, openedAt: openedAt, showsHeading: false)
+                        PhoneNotificationSetup(
+                            subscription: subscription, openedAt: openedAt, showsHeading: false,
+                            testNotificationServed: model.testNotificationServed,
+                            testNotificationState: model.testNotificationState,
+                            onSendTestNotification: { Task { await model.sendTestNotification() } })
                     }
                 }
             }

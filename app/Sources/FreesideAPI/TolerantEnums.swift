@@ -75,6 +75,7 @@ extension Components.Schemas.DisplayNameSource: UnknownTolerantEnum {}
 extension Components.Schemas.StageName: UnknownTolerantEnum {}
 extension Components.Schemas.AnswerRoute: UnknownTolerantEnum {}
 extension Components.Schemas.ComprehensionEventKind: UnknownTolerantEnum {}
+extension Components.Schemas.DeviceTestNotificationOutcome: UnknownTolerantEnum {}
 extension Components.Schemas.BlockedKind: UnknownTolerantEnum {}
 extension Components.Schemas.AdmissionKind: UnknownTolerantEnum {}
 extension Components.Schemas.RoleName: UnknownTolerantEnum {}
@@ -199,6 +200,7 @@ public enum TolerantEnums {
         Components.Schemas.StageName.self,
         Components.Schemas.AnswerRoute.self,
         Components.Schemas.ComprehensionEventKind.self,
+        Components.Schemas.DeviceTestNotificationOutcome.self,
         Components.Schemas.BlockedKind.self,
         Components.Schemas.AdmissionKind.self,
         Components.Schemas.RoleName.self,

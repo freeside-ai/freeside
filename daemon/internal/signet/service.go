@@ -117,6 +117,11 @@ type Service struct {
 	// logged once per process.
 	unseenMu     sync.Mutex
 	unseenWarned map[domain.ItemID]struct{}
+	// testNoticeMu guards testNoticeLastSent, the last instant the device
+	// test-notification HTTP route published a notice per device
+	// (test_notice.go). Kept in process memory: a restart forgets it.
+	testNoticeMu       sync.Mutex
+	testNoticeLastSent map[domain.DeviceID]time.Time
 }
 
 // FollowUpFiler is the dispatcher that files approved follow-up issues and

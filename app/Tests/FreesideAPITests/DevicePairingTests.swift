@@ -483,4 +483,74 @@ private func client(server: MockServer, token: String? = nil) -> Client {
         }
         #expect(await server.snapshot(itemID: before.item.id) == itemNow)
     }
+
+    @Test func sendDeviceTestNotificationChecksCallerAndReturnsConfiguredOutcomes() async throws {
+        let server = MockServer(authMode: .enforcing)
+        await server.seedPairingCode("483911")
+        await server.seedPairingCode("592044")
+        let first = try await client(server: server).pairDevice(
+            body: .json(.init(pairing_code: "483911", display_name: "Ben's iPhone"))
+        ).created.body.json
+        let second = try await client(server: server).pairDevice(
+            body: .json(.init(pairing_code: "592044", display_name: "Ben's iPad"))
+        ).created.body.json
+        guard case .active(let firstDevice) = first.device.device,
+            case .active(let secondDevice) = second.device.device
+        else {
+            Issue.record("expected active paired devices")
+            return
+        }
+
+        // Health advertises device_test_notification.
+        let health = try await client(server: server).getHealth().ok.body.json
+        #expect(health.features?.contains(.device_test_notification) == true)
+
+        // Unauthenticated call fails closed with 401.
+        let unauth = try await client(server: server).sendDeviceTestNotification(
+            path: .init(device_id: firstDevice.id))
+        guard case .undocumented(401, _) = unauth else {
+            Issue.record("expected 401 without credential, got \(unauth)")
+            return
+        }
+
+        let api = client(server: server, token: first.device_token)
+
+        // Naming another device returns 404.
+        _ = try await api.sendDeviceTestNotification(path: .init(device_id: secondDevice.id)).notFound
+
+        // Default answer is accepted.
+        let accepted = try await api.sendDeviceTestNotification(
+            path: .init(device_id: firstDevice.id)
+        ).ok.body.json
+        #expect(accepted == .init(outcome: .accepted, provider_status: nil, transport_failure: nil))
+
+        // Provider rejection, transport failure, and notifier unavailable.
+        let rejectedBody = Components.Schemas.DeviceTestNotification(
+            outcome: .provider_rejected, provider_status: 403, transport_failure: nil)
+        await server.setTestNotificationAnswer(.outcome(rejectedBody))
+        #expect(
+            try await api.sendDeviceTestNotification(path: .init(device_id: firstDevice.id)).ok.body.json
+                == rejectedBody)
+
+        let transportBody = Components.Schemas.DeviceTestNotification(
+            outcome: .transport_failed, provider_status: nil, transport_failure: "request timed out")
+        await server.setTestNotificationAnswer(.outcome(transportBody))
+        #expect(
+            try await api.sendDeviceTestNotification(path: .init(device_id: firstDevice.id)).ok.body.json
+                == transportBody)
+
+        let unavailableBody = Components.Schemas.DeviceTestNotification(
+            outcome: .notifier_unavailable, provider_status: nil, transport_failure: nil)
+        await server.setTestNotificationAnswer(.outcome(unavailableBody))
+        #expect(
+            try await api.sendDeviceTestNotification(path: .init(device_id: firstDevice.id)).ok.body.json
+                == unavailableBody)
+
+        // Rate-limited 429 carries Retry-After.
+        await server.setTestNotificationAnswer(.tooRecent(retryAfter: 17))
+        let limited = try await api.sendDeviceTestNotification(
+            path: .init(device_id: firstDevice.id)
+        ).tooManyRequests
+        #expect(limited.headers.Retry_hyphen_After == 17)
+    }
 }

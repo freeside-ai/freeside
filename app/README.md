@@ -235,10 +235,14 @@ Set a phone up once. Turn its notifications on in Settings under
    copies. When the daemon publishes to a server other than ntfy's own
    `https://ntfy.sh`, the steps show that server: turn on **Use another
    server** in the ntfy app and enter it.
-3. On the daemon's host, send a test notification:
-   `freesided notify-test -state-dir /path/to/daemon-state`.
+3. Tap **Send Test Notification** to ask the daemon to send one test
+   notification to this phone (limited to once every 30 seconds per device).
+   Against an older daemon that doesn't advertise `device_test_notification`,
+   or from the daemon's host without the phone in hand, run
+   `freesided notify-test -state-dir /path/to/daemon-state` instead.
 4. Tap the notification on the phone. Freeside opens on the inbox, and the
-   steps' **Notification opened** row changes from "Never" to the time.
+   steps' **Notification opened** row changes from "Never" to the time
+   (ntfy accepting the test notification doesn't change it).
 
 - **Notification opened is an observation.** The phone records when it opens
   a notification's link, per pairing, in its own preferences. Any app on the

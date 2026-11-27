@@ -618,15 +618,22 @@ database from the CLI, restart the daemon, change work or grant paired devices
 host authority. A wrong or unavailable endpoint fails. The network API offers
 only the existing pairing preview and redemption, never code minting.
 
-To check a phone's notification setup, run this as the daemon's OS user:
+To check a phone's notification setup from the phone itself, tap **Send Test
+Notification** in Settings → Notifications (`POST /devices/{device_id}/test-notification`,
+advertised as `device_test_notification` in `/health`). A paired device may
+test only itself; repeated publishes for one device are bounded to once every
+30 seconds in daemon memory (`429` with `Retry-After` inside the interval).
+To run the same check from the daemon's host (without the phone in hand, or to
+test every active device without the per-device interval), run this as the
+daemon's OS user:
 
 ```sh
 freesided notify-test -state-dir /path/to/existing/daemon-state
 ```
 
-The running daemon publishes one test notification to the ntfy topic of each
-active paired device, whether or not its notifications switch is on, so a phone
-can be checked before it is turned on. The command prints a line per device:
+Both paths publish one test notification to the device's ntfy topic whether or
+not its notifications switch is on, so a phone can be checked before it is
+turned on. The command prints a line per device:
 its name, its ID, and either `accepted by ntfy` or `not sent:` with the
 provider's status or a failure class. `-device ID` tests one device. The
 command fails when a notice was not accepted or no active device matched.

@@ -2821,6 +2821,155 @@ public struct Client: APIProtocol {
             }
         )
     }
+    /// Send one test notification to the calling device
+    ///
+    /// Publishes one test notification to the calling device's ntfy topic so
+    /// notification setup can finish on the phone without running
+    /// `freesided notify-test` on the daemon host. The notification carries
+    /// the `freeside://inbox` link, writes no delivery row, moves no server
+    /// revision, and ignores the device's notifications switch, as the host
+    /// command does. The path device must equal the authenticated caller's
+    /// own device (else 404). Repeated publishes for one device are limited
+    /// by a minimum interval kept in daemon memory; a call that publishes
+    /// nothing (a refusal, or no configured notifier) does not start the
+    /// interval. No response body, header, log line, or error carries the
+    /// device's topic, publish URL, or ntfy access token.
+    ///
+    ///
+    /// - Remark: HTTP `POST /devices/{device_id}/test-notification`.
+    /// - Remark: Generated from `#/paths//devices/{device_id}/test-notification/post(sendDeviceTestNotification)`.
+    public func sendDeviceTestNotification(_ input: Operations.sendDeviceTestNotification.Input) async throws -> Operations.sendDeviceTestNotification.Output {
+        try await client.send(
+            input: input,
+            forOperation: Operations.sendDeviceTestNotification.id,
+            serializer: { input in
+                let path = try converter.renderedPath(
+                    template: "/devices/{}/test-notification",
+                    parameters: [
+                        input.path.device_id
+                    ]
+                )
+                var request: HTTPTypes.HTTPRequest = .init(
+                    soar_path: path,
+                    method: .post
+                )
+                suppressMutabilityWarning(&request)
+                converter.setAcceptHeader(
+                    in: &request.headerFields,
+                    contentTypes: input.headers.accept
+                )
+                return (request, nil)
+            },
+            deserializer: { response, responseBody in
+                switch response.status.code {
+                case 200:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.sendDeviceTestNotification.Output.Ok.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.DeviceTestNotification.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .ok(.init(body: body))
+                case 403:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.sendDeviceTestNotification.Output.Forbidden.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .forbidden(.init(body: body))
+                case 404:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Components.Responses.NotFound.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .notFound(.init(body: body))
+                case 429:
+                    let headers: Operations.sendDeviceTestNotification.Output.TooManyRequests.Headers = .init(Retry_hyphen_After: try converter.getOptionalHeaderFieldAsURI(
+                        in: response.headerFields,
+                        name: "Retry-After",
+                        as: Swift.Int.self
+                    ))
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.sendDeviceTestNotification.Output.TooManyRequests.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .tooManyRequests(.init(
+                        headers: headers,
+                        body: body
+                    ))
+                default:
+                    return .undocumented(
+                        statusCode: response.status.code,
+                        .init(
+                            headerFields: response.headerFields,
+                            body: responseBody
+                        )
+                    )
+                }
+            }
+        )
+    }
     /// Register the device's action capability contract
     ///
     /// Records the set of decision actions the authenticated device's app

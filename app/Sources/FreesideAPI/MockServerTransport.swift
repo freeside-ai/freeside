@@ -419,6 +419,36 @@ public struct MockServerTransport: ClientTransport {
                         message: "no entity exists under the identifier")
                 )
             }
+        case "sendDeviceTestNotification":
+            let callerID = authenticatedDevice ?? DeviceFixtures.currentDeviceID
+            guard let deviceID = Self.deviceID(inTestNotificationPath: request.path),
+                deviceID == callerID
+            else {
+                return try Self.json(
+                    status: .notFound,
+                    body: Components.Schemas._Error(
+                        message: "no entity exists under the identifier"))
+            }
+            switch await server.sendDeviceTestNotification(id: deviceID) {
+            case .ok(let result):
+                return try Self.json(status: .ok, body: result)
+            case .tooManyRequests(let retryAfter):
+                let (base, responseBody) = try Self.json(
+                    status: .tooManyRequests,
+                    body: Components.Schemas._Error(message: "test notification sent too recently"))
+                var response = base
+                response.headerFields[.retryAfter] = String(max(1, retryAfter))
+                return (response, responseBody)
+            case .inactive:
+                return try Self.json(
+                    status: .forbidden,
+                    body: Components.Schemas._Error(message: "device is not active"))
+            case .notFound:
+                return try Self.json(
+                    status: .notFound,
+                    body: Components.Schemas._Error(
+                        message: "no entity exists under the identifier"))
+            }
         case "submitCommand":
             guard let body else {
                 return (HTTPResponse(status: .badRequest), nil)
@@ -956,6 +986,12 @@ public struct MockServerTransport: ClientTransport {
         let parts = path?.split(separator: "/") ?? []
         guard parts.count >= 2, parts.last == "notifications" else { return nil }
         return String(parts[parts.count - 2]).removingPercentEncoding
+    }
+
+    private static func deviceID(inTestNotificationPath path: String?) -> String? {
+        let parts = path?.split(separator: "/") ?? []
+        guard parts.count == 3, parts[0] == "devices", parts[2] == "test-notification" else { return nil }
+        return String(parts[1]).removingPercentEncoding
     }
 
     /// `/attention/items/{item_id}/deliveries`: the id is the segment

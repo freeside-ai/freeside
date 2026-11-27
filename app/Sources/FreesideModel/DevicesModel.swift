@@ -18,6 +18,30 @@ package final class DevicesModel {
         case failed(String)
     }
 
+    /// The state of sending a test notification to this device.
+    package enum TestNotificationState: Equatable {
+        case idle
+        case sending
+        case finished(TestNotificationOutcome)
+    }
+
+    /// What a test notification request answered, for the phone's setup step.
+    /// `accepted` is ntfy's acceptance, never delivery to the phone.
+    package enum TestNotificationOutcome: Equatable {
+        case accepted(String)
+        case failed(String)
+
+        package var message: String {
+            switch self {
+            case .accepted(let message), .failed(let message): message
+            }
+        }
+
+        package var isFailure: Bool {
+            if case .failed = self { true } else { false }
+        }
+    }
+
     /// One listed device, flattened from the contract's active and revoked
     /// variants.
     package struct Row: Identifiable, Equatable {
@@ -44,6 +68,8 @@ package final class DevicesModel {
     /// at a time, and the switch shows the requested value meanwhile.
     package private(set) var notificationsChangingID: String?
     package private(set) var notificationsFailure: String?
+    /// State of the phone's test-notification control.
+    package private(set) var testNotificationState: TestNotificationState = .idle
 
     static let loadFailureMessage = "Couldn't load devices. Check the connection to the daemon and try again."
     static let unauthenticatedMessage = "This device is no longer paired with the daemon."
@@ -53,6 +79,14 @@ package final class DevicesModel {
         "The daemon didn't confirm the change to notifications. Refresh to see the current setting."
     static let signOutFailureMessage =
         "This device was revoked, but its stored credential couldn't be removed. Close this sheet and choose Pair Again."
+    static let testNotificationAcceptedMessage = "Accepted by ntfy. Tap the notification when it arrives."
+    static let testNotificationUnavailableMessage = "This daemon doesn't have notifications configured."
+    static let testNotificationUnknownOutcomeMessage =
+        "The daemon returned a test-notification result this app doesn't recognize."
+    static let testNotificationTooRecentMessage = "A test notification was just sent. Wait a moment and try again."
+    static let testNotificationInactiveMessage = "This device is no longer active on the daemon."
+    static let testNotificationNotFoundMessage = "The daemon doesn't recognize this device."
+    static let testNotificationUnreachableMessage = "Couldn't reach the daemon to send a test notification."
 
     private let coordinator: SyncCoordinator
     private let signOut: @MainActor () throws -> Void
@@ -92,6 +126,9 @@ package final class DevicesModel {
     package var revokedDevices: [Row] { rows.filter(\.isRevoked) }
     /// Off until the list has loaded: the daemon's default.
     package var currentDeviceNotificationsEnabled: Bool { currentDevice?.notificationsEnabled ?? false }
+    /// Whether the daemon serves `POST /devices/{device_id}/test-notification`
+    /// (`GET /health`'s `features` lists `device_test_notification`).
+    package var testNotificationServed: Bool { coordinator.daemonFeatures.contains(.device_test_notification) }
 
     /// Loads on first appearance and again whenever the observed server
     /// revision has moved since the rows were read: pairing and revocation
@@ -216,6 +253,72 @@ package final class DevicesModel {
         } catch {
             notificationsFailure = Self.notificationsFailureMessage
         }
+    }
+
+    /// Asks the daemon to publish one test notification to this device's topic
+    /// (`POST /devices/{device_id}/test-notification`). Ignores overlapping
+    /// calls while one is in flight, and never touches `notificationOpens`:
+    /// that row records only when a notification's link is actually tapped.
+    package func sendTestNotification() async {
+        guard testNotificationState != .sending else { return }
+        testNotificationState = .sending
+        do {
+            let output = try await coordinator.store.client.sendDeviceTestNotification(
+                path: .init(device_id: currentDeviceID))
+            switch output {
+            case .ok(let ok):
+                let result = try ok.body.json
+                testNotificationState = .finished(Self.testNotificationOutcome(from: result))
+            case .tooManyRequests(let limited):
+                testNotificationState = .finished(
+                    .failed(Self.tooRecentMessage(retryAfter: limited.headers.Retry_hyphen_After)))
+            case .forbidden:
+                testNotificationState = .finished(.failed(Self.testNotificationInactiveMessage))
+            case .notFound:
+                testNotificationState = .finished(.failed(Self.testNotificationNotFoundMessage))
+            case .undocumented(let status, _) where status == 401:
+                testNotificationState = .idle
+                fail(status: status)
+            case .undocumented(let status, _):
+                testNotificationState = .finished(
+                    .failed("The daemon didn't answer the test notification request (HTTP \(status))."))
+            }
+        } catch {
+            if error is CancellationError || Task.isCancelled {
+                testNotificationState = .idle
+                return
+            }
+            testNotificationState = .finished(.failed(Self.testNotificationUnreachableMessage))
+        }
+    }
+
+    private static func testNotificationOutcome(
+        from result: Components.Schemas.DeviceTestNotification
+    ) -> TestNotificationOutcome {
+        switch result.outcome {
+        case .accepted:
+            return .accepted(testNotificationAcceptedMessage)
+        case .provider_rejected:
+            if let status = result.provider_status {
+                return .failed("ntfy refused the test notification (HTTP \(status)).")
+            }
+            return .failed("ntfy refused the test notification.")
+        case .transport_failed:
+            if let failure = result.transport_failure {
+                return .failed("Couldn't reach ntfy: \(failure).")
+            }
+            return .failed("Couldn't reach ntfy.")
+        case .notifier_unavailable:
+            return .failed(testNotificationUnavailableMessage)
+        case .unknown:
+            return .failed(testNotificationUnknownOutcomeMessage)
+        }
+    }
+
+    private static func tooRecentMessage(retryAfter: Int?) -> String {
+        guard let seconds = retryAfter, seconds > 0 else { return testNotificationTooRecentMessage }
+        let unit = seconds == 1 ? "second" : "seconds"
+        return "A test notification was just sent. Try again in \(seconds) \(unit)."
     }
 
     /// A failed read shows no rows: a list that may be out of date would

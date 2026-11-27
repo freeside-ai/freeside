@@ -458,6 +458,24 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `PUT /devices/{device_id}/notifications`.
     /// - Remark: Generated from `#/paths//devices/{device_id}/notifications/put(setDeviceNotifications)`.
     func setDeviceNotifications(_ input: Operations.setDeviceNotifications.Input) async throws -> Operations.setDeviceNotifications.Output
+    /// Send one test notification to the calling device
+    ///
+    /// Publishes one test notification to the calling device's ntfy topic so
+    /// notification setup can finish on the phone without running
+    /// `freesided notify-test` on the daemon host. The notification carries
+    /// the `freeside://inbox` link, writes no delivery row, moves no server
+    /// revision, and ignores the device's notifications switch, as the host
+    /// command does. The path device must equal the authenticated caller's
+    /// own device (else 404). Repeated publishes for one device are limited
+    /// by a minimum interval kept in daemon memory; a call that publishes
+    /// nothing (a refusal, or no configured notifier) does not start the
+    /// interval. No response body, header, log line, or error carries the
+    /// device's topic, publish URL, or ntfy access token.
+    ///
+    ///
+    /// - Remark: HTTP `POST /devices/{device_id}/test-notification`.
+    /// - Remark: Generated from `#/paths//devices/{device_id}/test-notification/post(sendDeviceTestNotification)`.
+    func sendDeviceTestNotification(_ input: Operations.sendDeviceTestNotification.Input) async throws -> Operations.sendDeviceTestNotification.Output
     /// Register the device's action capability contract
     ///
     /// Records the set of decision actions the authenticated device's app
@@ -1137,6 +1155,32 @@ extension APIProtocol {
             path: path,
             headers: headers,
             body: body
+        ))
+    }
+    /// Send one test notification to the calling device
+    ///
+    /// Publishes one test notification to the calling device's ntfy topic so
+    /// notification setup can finish on the phone without running
+    /// `freesided notify-test` on the daemon host. The notification carries
+    /// the `freeside://inbox` link, writes no delivery row, moves no server
+    /// revision, and ignores the device's notifications switch, as the host
+    /// command does. The path device must equal the authenticated caller's
+    /// own device (else 404). Repeated publishes for one device are limited
+    /// by a minimum interval kept in daemon memory; a call that publishes
+    /// nothing (a refusal, or no configured notifier) does not start the
+    /// interval. No response body, header, log line, or error carries the
+    /// device's topic, publish URL, or ntfy access token.
+    ///
+    ///
+    /// - Remark: HTTP `POST /devices/{device_id}/test-notification`.
+    /// - Remark: Generated from `#/paths//devices/{device_id}/test-notification/post(sendDeviceTestNotification)`.
+    public func sendDeviceTestNotification(
+        path: Operations.sendDeviceTestNotification.Input.Path,
+        headers: Operations.sendDeviceTestNotification.Input.Headers = .init()
+    ) async throws -> Operations.sendDeviceTestNotification.Output {
+        try await sendDeviceTestNotification(Operations.sendDeviceTestNotification.Input(
+            path: path,
+            headers: headers
         ))
     }
     /// Register the device's action capability contract
@@ -12173,7 +12217,7 @@ public enum Components {
                 case started_at
             }
         }
-        /// A feature a daemon build may serve, named in `/health`'s `features` so an app can turn off what an older daemon lacks. A name is registered here once, by the unit that adds an app-visible surface a newer app would otherwise send to a daemon that refuses it. `parked_task_move`: the `move_parked_task` command (plan §4, quota park). `work_hours`: the `GET /work-hours` read. `question_option_answers`: `question_answers` on an agent_question answer. `execution_hosts`: the `GET /execution-hosts` read.
+        /// A feature a daemon build may serve, named in `/health`'s `features` so an app can turn off what an older daemon lacks. A name is registered here once, by the unit that adds an app-visible surface a newer app would otherwise send to a daemon that refuses it. `parked_task_move`: the `move_parked_task` command (plan §4, quota park). `work_hours`: the `GET /work-hours` read. `question_option_answers`: `question_answers` on an agent_question answer. `execution_hosts`: the `GET /execution-hosts` read. `device_test_notification`: `POST /devices/{device_id}/test-notification`.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/DaemonFeature`.
@@ -12182,6 +12226,7 @@ public enum Components {
             case work_hours = "work_hours"
             case question_option_answers = "question_option_answers"
             case execution_hosts = "execution_hosts"
+            case device_test_notification = "device_test_notification"
             case unknown = "unknown"
         }
         /// The pairing exchange's input: the short-lived code read off the daemon host and the human label the new device will carry.
@@ -13361,6 +13406,55 @@ public enum Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "enabled"
                 ])
+            }
+        }
+        /// The outcome of `POST /devices/{device_id}/test-notification`. `accepted`: ntfy accepted the publish (never a claim that the phone showed it). `provider_rejected`: ntfy returned a non-2xx HTTP status, reported in `provider_status`. `transport_failed`: the publish got no HTTP response, with the daemon's fixed failure class in `transport_failure`. `notifier_unavailable`: the daemon has no usable notification channel configured. `unknown`: the value a client decodes a member it does not recognize as; the daemon never sends it.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/DeviceTestNotificationOutcome`.
+        @frozen public enum DeviceTestNotificationOutcome: String, Codable, Hashable, Sendable, CaseIterable {
+            case accepted = "accepted"
+            case provider_rejected = "provider_rejected"
+            case transport_failed = "transport_failed"
+            case notifier_unavailable = "notifier_unavailable"
+            case unknown = "unknown"
+        }
+        /// The outcome of attempting to send one test notification to the calling device. Carries only the typed outcome and, when applicable, the provider HTTP status or fixed failure class; never carries the topic, publish URL, or access token.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/DeviceTestNotification`.
+        public struct DeviceTestNotification: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DeviceTestNotification/outcome`.
+            public var outcome: Components.Schemas.DeviceTestNotificationOutcome
+            /// ntfy's HTTP status code when `outcome` is `provider_rejected`, and null otherwise.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DeviceTestNotification/provider_status`.
+            public var provider_status: Swift.Int?
+            /// The daemon's fixed description of the failure class (such as `request timed out`) when `outcome` is `transport_failed`, and null otherwise.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DeviceTestNotification/transport_failure`.
+            public var transport_failure: Swift.String?
+            /// Creates a new `DeviceTestNotification`.
+            ///
+            /// - Parameters:
+            ///   - outcome:
+            ///   - provider_status: ntfy's HTTP status code when `outcome` is `provider_rejected`, and null otherwise.
+            ///   - transport_failure: The daemon's fixed description of the failure class (such as `request timed out`) when `outcome` is `transport_failed`, and null otherwise.
+            public init(
+                outcome: Components.Schemas.DeviceTestNotificationOutcome,
+                provider_status: Swift.Int? = nil,
+                transport_failure: Swift.String? = nil
+            ) {
+                self.outcome = outcome
+                self.provider_status = provider_status
+                self.transport_failure = transport_failure
+            }
+            public enum CodingKeys: String, CodingKey {
+                case outcome
+                case provider_status
+                case transport_failure
             }
         }
         /// The actions the device's app build can present and submit (plan §5.14, §8), registered by the device so the daemon can derive its action surface. The daemon content-addresses the action set, so every device on one app build shares a digest.
@@ -24379,6 +24473,297 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Send one test notification to the calling device
+    ///
+    /// Publishes one test notification to the calling device's ntfy topic so
+    /// notification setup can finish on the phone without running
+    /// `freesided notify-test` on the daemon host. The notification carries
+    /// the `freeside://inbox` link, writes no delivery row, moves no server
+    /// revision, and ignores the device's notifications switch, as the host
+    /// command does. The path device must equal the authenticated caller's
+    /// own device (else 404). Repeated publishes for one device are limited
+    /// by a minimum interval kept in daemon memory; a call that publishes
+    /// nothing (a refusal, or no configured notifier) does not start the
+    /// interval. No response body, header, log line, or error carries the
+    /// device's topic, publish URL, or ntfy access token.
+    ///
+    ///
+    /// - Remark: HTTP `POST /devices/{device_id}/test-notification`.
+    /// - Remark: Generated from `#/paths//devices/{device_id}/test-notification/post(sendDeviceTestNotification)`.
+    public enum sendDeviceTestNotification {
+        public static let id: Swift.String = "sendDeviceTestNotification"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/devices/{device_id}/test-notification/POST/path`.
+            public struct Path: Sendable, Hashable {
+                /// The paired device's identifier.
+                ///
+                /// - Remark: Generated from `#/paths/devices/{device_id}/test-notification/POST/path/device_id`.
+                public var device_id: Components.Parameters.DeviceID
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - device_id: The paired device's identifier.
+                public init(device_id: Components.Parameters.DeviceID) {
+                    self.device_id = device_id
+                }
+            }
+            public var path: Operations.sendDeviceTestNotification.Input.Path
+            /// - Remark: Generated from `#/paths/devices/{device_id}/test-notification/POST/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.sendDeviceTestNotification.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.sendDeviceTestNotification.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.sendDeviceTestNotification.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            public init(
+                path: Operations.sendDeviceTestNotification.Input.Path,
+                headers: Operations.sendDeviceTestNotification.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/devices/{device_id}/test-notification/POST/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/devices/{device_id}/test-notification/POST/responses/200/content/application\/json`.
+                    case json(Components.Schemas.DeviceTestNotification)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.DeviceTestNotification {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.sendDeviceTestNotification.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.sendDeviceTestNotification.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// The outcome of attempting to send the test notification.
+            ///
+            /// - Remark: Generated from `#/paths//devices/{device_id}/test-notification/post(sendDeviceTestNotification)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.sendDeviceTestNotification.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.sendDeviceTestNotification.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct Forbidden: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/devices/{device_id}/test-notification/POST/responses/403/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/devices/{device_id}/test-notification/POST/responses/403/content/application\/json`.
+                    case json(Components.Schemas._Error)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas._Error {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.sendDeviceTestNotification.Output.Forbidden.Body
+                /// Creates a new `Forbidden`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.sendDeviceTestNotification.Output.Forbidden.Body) {
+                    self.body = body
+                }
+            }
+            /// The calling device was revoked after the request was authenticated. Nothing was published.
+            ///
+            ///
+            /// - Remark: Generated from `#/paths//devices/{device_id}/test-notification/post(sendDeviceTestNotification)/responses/403`.
+            ///
+            /// HTTP response code: `403 forbidden`.
+            case forbidden(Operations.sendDeviceTestNotification.Output.Forbidden)
+            /// The associated value of the enum case if `self` is `.forbidden`.
+            ///
+            /// - Throws: An error if `self` is not `.forbidden`.
+            /// - SeeAlso: `.forbidden`.
+            public var forbidden: Operations.sendDeviceTestNotification.Output.Forbidden {
+                get throws {
+                    switch self {
+                    case let .forbidden(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "forbidden",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No entity exists under the identifier.
+            ///
+            /// - Remark: Generated from `#/paths//devices/{device_id}/test-notification/post(sendDeviceTestNotification)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct TooManyRequests: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/devices/{device_id}/test-notification/POST/responses/429/headers`.
+                public struct Headers: Sendable, Hashable {
+                    /// Whole seconds until the next test notification is admitted.
+                    ///
+                    /// - Remark: Generated from `#/paths/devices/{device_id}/test-notification/POST/responses/429/headers/Retry-After`.
+                    public var Retry_hyphen_After: Swift.Int?
+                    /// Creates a new `Headers`.
+                    ///
+                    /// - Parameters:
+                    ///   - Retry_hyphen_After: Whole seconds until the next test notification is admitted.
+                    public init(Retry_hyphen_After: Swift.Int? = nil) {
+                        self.Retry_hyphen_After = Retry_hyphen_After
+                    }
+                }
+                /// Received HTTP response headers
+                public var headers: Operations.sendDeviceTestNotification.Output.TooManyRequests.Headers
+                /// - Remark: Generated from `#/paths/devices/{device_id}/test-notification/POST/responses/429/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/devices/{device_id}/test-notification/POST/responses/429/content/application\/json`.
+                    case json(Components.Schemas._Error)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas._Error {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.sendDeviceTestNotification.Output.TooManyRequests.Body
+                /// Creates a new `TooManyRequests`.
+                ///
+                /// - Parameters:
+                ///   - headers: Received HTTP response headers
+                ///   - body: Received HTTP response body
+                public init(
+                    headers: Operations.sendDeviceTestNotification.Output.TooManyRequests.Headers = .init(),
+                    body: Operations.sendDeviceTestNotification.Output.TooManyRequests.Body
+                ) {
+                    self.headers = headers
+                    self.body = body
+                }
+            }
+            /// A test notification was already published for this device less than the minimum interval ago. Nothing was published.
+            ///
+            ///
+            /// - Remark: Generated from `#/paths//devices/{device_id}/test-notification/post(sendDeviceTestNotification)/responses/429`.
+            ///
+            /// HTTP response code: `429 tooManyRequests`.
+            case tooManyRequests(Operations.sendDeviceTestNotification.Output.TooManyRequests)
+            /// The associated value of the enum case if `self` is `.tooManyRequests`.
+            ///
+            /// - Throws: An error if `self` is not `.tooManyRequests`.
+            /// - SeeAlso: `.tooManyRequests`.
+            public var tooManyRequests: Operations.sendDeviceTestNotification.Output.TooManyRequests {
+                get throws {
+                    switch self {
+                    case let .tooManyRequests(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "tooManyRequests",
                             response: self
                         )
                     }

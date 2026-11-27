@@ -156,8 +156,9 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 		"OperatorMessageState":        enumStrings(domain.AllOperatorMessageStates),
 		"OperatorMessageRefusal":      enumStrings(domain.AllOperatorMessageRefusals),
 
-		// Signet-owned wire vocabulary for the transcript read.
+		// Signet-owned wire vocabularies.
 		"InvocationTranscriptAvailability": enumStrings(signet.AllInvocationTranscriptAvailabilities),
+		"DeviceTestNotificationOutcome":    enumStrings(signet.AllDeviceTestNotificationOutcomes),
 	}
 	// A schema with an enum key decodes to a non-nil slice; enum: [null]
 	// decodes to [""].
