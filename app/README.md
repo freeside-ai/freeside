@@ -316,17 +316,35 @@ pkill -x FreesideMac
 
 ### Iterating on a Visible Change
 
-Look at a change through selected renders, and run the whole screenshot
-matrix once before push, not once per step. The full
-`surfacesMatchRecordedPixels` pass draws 1,544 images one at a time on the
-main actor: a light surface at `large`, `xxxlarge`, `ax1`, and `ax5`, the
-sizes where an explicit Dynamic Type check branches, and a dark surface at
-`large`, plus `ax5` for six named wrapped-text specimens (#2250). On the
-development Mac (2026-10-24) it took 87 s alone and 140 s inside
-`scripts/check.sh app test`, before the build. One card through the
-selected-key
-probe took 16 to 19 s including an incremental build, and 3.5 s with
-nothing to rebuild.
+Look at a change through selected renders, check and record only the surface
+family it touches, and run the whole screenshot matrix once before push. The
+full `surfacesMatchRecordedPixels` pass draws 2,632 images across 17 named
+families one at a time on the main actor: a light surface at `large`,
+`xxxlarge`, `ax1`, and `ax5`, the sizes where an explicit Dynamic Type check
+branches, and a dark surface at `large`, plus `ax5` for six named wrapped-text
+specimens (#2250). Each family's digests live in its own flat resource file,
+`Tests/FreesideCoreTests/Resources/ScreenshotDigests-<family>.json` (mapped by
+longest dash-delimited prefix in `Tests/FreesideCoreTests/ScreenshotFamilies.swift`):
+
+| Family | Covers |
+| --- | --- |
+| `decision-spec-approval` | Specification approval cards and image-attachment specimen |
+| `decision-review-dispute` | Review dispute cards |
+| `decision-final-review` | Ready-for-final-review cards and 4b survey frames |
+| `decision-review-findings` | Finding adjudication, diminishing returns, configuration, and contradiction cards |
+| `decision-proposals` | Agent question, effect proposal, and task proposal cards and revision sheets |
+| `decision-status` | Execution failure, system health, publish blocked, stall, feedback, banner, and newer-type cards |
+| `task-page` | Task detail pages |
+| `task-holds-stops` | Task hold callouts, hold rails, and stop states |
+| `task-stages` | Task stage rows, history, progress, approval, published, external/legacy review, and style specimens |
+| `run-review` | Run review sections, review evidence, and review output |
+| `run-timeline` | Run timelines and agent transcript sheets |
+| `inbox-list` | Unified list, unattended-stopped notices, task rows, inbox states, freshness banners, and project filter |
+| `composers` | New Task sheet, message and discuss composers, conversations, answer-and-retry, and consequence sheets |
+| `readers-controls` | Prompt and specification readers, attachment reader/states, card style, choice list, and segmented control |
+| `settings-routing` | Agents/routing pane, workflow policy pane, and role picker |
+| `settings-usage` | Usage pane, work-hours status, and system health pane |
+| `settings-general` | Settings shell, devices, notifications, daemon, pairing, Pair a Device, menu panel, compatibility refusal, and revoked pane |
 
 1. **While iterating, render only the surfaces the step touches,** and look
    at those images:
@@ -339,8 +357,8 @@ nothing to rebuild.
    ```
 
    A surface is a primary-surface key from
-   `Tests/FreesideCoreTests/Resources/ScreenshotDigests.json` without its
-   text-size suffix; `FREESIDE_RENDER_SIZES` defaults to `large` and takes
+   `Tests/FreesideCoreTests/Resources/ScreenshotDigests-<family>.json` without
+   its text-size suffix; `FREESIDE_RENDER_SIZES` defaults to `large` and takes
    all six suite sizes, including `xsmall` and `ax3`, which the comparison
    matrix skips. The script
    wraps the probe described under
@@ -350,23 +368,64 @@ nothing to rebuild.
    `FREESIDE_RECORD_SCREENSHOTS=1`, and never compares or records a digest.
    Run only the affected test suites next to it, from `app/`:
    `swift test --only-use-versions-from-resolved-file --filter '<SuiteA>|<SuiteB>'`.
-2. **Record digests at the end, once per render-changing commit.** Every
-   commit stays green, so each commit that changes pixels carries its own
-   manifest update. Review the changed images first, then replay the branch
-   with the recording command instead of re-recording during iteration. For
-   example, from the repository root (the `-x` payload stays on one line:
-   Git rejects an exec command that contains a newline):
+
+2. **Check one or more families directly** with `FREESIDE_SCREENSHOT_FAMILY`
+   (comma-separated family names). From `app/`:
 
    ```sh
-   git rebase -x 'FREESIDE_RECORD_SCREENSHOTS=1 swift test --package-path app --only-use-versions-from-resolved-file --filter ScreenshotRegressionTests/surfacesMatchRecordedPixels && git add app/Tests/FreesideCoreTests/Resources/ScreenshotDigests.json && git commit --amend --no-edit' origin/main
+   FREESIDE_SCREENSHOT_FAMILY=settings-general \
+     swift test --only-use-versions-from-resolved-file \
+     --filter ScreenshotRegressionTests/surfacesMatchRecordedPixels
    ```
 
-   The recording rules at the end of the next section still apply.
-3. **Then run the full suite once, before push.**
-   `bash scripts/check.sh app test` compares every digest and runs the rest
-   of the app tests; a selected render compares none, and the recording
-   command runs one test. It comes after recording because a change that
-   moves pixels fails the comparison until its digests are recorded.
+   An empty or unknown family selection fails, and combining
+   `FREESIDE_SCREENSHOT_FAMILY` with `FREESIDE_SCREENSHOT_SHARD` fails. Any
+   family file that fails to decode (including one with merge-conflict markers)
+   fails a comparison run loudly. Unset, the full matrix runs every family.
+
+3. **Record only the families you changed, once per render-changing commit.**
+   Every commit stays green, so each commit that changes pixels carries its own
+   family digest update. Review the changed images first, then use
+   `app/scripts/record-screenshots.sh` from the repository root:
+
+   ```sh
+   # Record and verify one or more families in the current tree:
+   bash app/scripts/record-screenshots.sh settings-general
+   bash app/scripts/record-screenshots.sh settings-general composers
+
+   # Replay recording across every commit since origin/main, amending only
+   # the selected family digest files:
+   bash app/scripts/record-screenshots.sh --each-commit origin/main settings-general
+   ```
+
+   Recording writes only the selected families' files and only when a file's
+   encoded bytes change (a no-op recording leaves every tracked resource
+   byte-identical, and a failed render leaves every file untouched). It never
+   decodes the selected families' own files as expected baselines, so a family
+   file with merge-conflict markers can be re-recorded cleanly while unselected
+   family files still validate. The script stops on the first failure, never
+   force-pushes, stashes, or resets, and preserves unrelated work.
+
+4. **Resolve digest-only rebase conflicts with `--resolve`.** When rebasing two
+   branches that touched the same family stops with conflicts only in
+   `ScreenshotDigests-<family>.json` files, re-record and stage just the
+   conflicted families from the repository root, then continue the rebase:
+
+   ```sh
+   bash app/scripts/record-screenshots.sh --resolve
+   git rebase --continue
+   ```
+
+   `--resolve` refuses and touches nothing when any non-digest path (such as a
+   source file) is unmerged; resolve source conflicts by hand first. It never
+   continues the rebase automatically.
+
+5. **Then run the full suite once, before push.**
+   `bash scripts/check.sh app test` compares every family's digests and runs
+   the rest of the app tests (including `taskHistoryEvidence`,
+   `publishedHandoffSurfaces`, the mounted countdown pairs, and the full
+   accessibility insertion pass). It comes after recording because a change
+   that moves pixels fails the comparison until its digests are recorded.
 
 CI renders the matrix as two slices beside the other suites (see the
 Swift build cache under [Build and test](#build-and-test)).
@@ -469,17 +528,31 @@ Baseline recording requires the designated host and reviewed images. The host
 is the development Mac on macOS 27.2 with Xcode 27.2, named by
 `baselineOperatingSystemKey` (`macOS-27.2`) in `ScreenshotRegressionTests.swift`.
 The key holds the major and minor version, so a patch update still records.
-Recording refuses any other minor version, a hosted runner, and a sharded run.
+Recording refuses any other minor version, a hosted runner, and a sharded run
+(`FREESIDE_SCREENSHOT_SHARD`), while accepting `FREESIDE_SCREENSHOT_FAMILY` to
+record selected families or unset to record all families.
 CI compares on the `xcode-27` image with Xcode 27.2
 (`.github/workflows/convergence-ci.yml`), whose build was 27B48 when the Mac's
-27B52 recorded this baseline. Hosted-runner overrides still require
-hosted image evidence; local pixels cannot establish an override.
+27B52 recorded this baseline.
+
+**Override tier and stale-override check.** `ScreenshotDigestOverrides.json`
+stays a single file (currently `{}`) holding optional hosted-runner overrides
+layered on top of the per-family universal baselines. Recording writes only the
+universal baselines in `ScreenshotDigests-<family>.json`; local pixels never
+establish or update a hosted-runner override. When a recording changes a key
+(or re-records an unreadable conflicted family file containing a key) that has
+an entry under any OS key in `ScreenshotDigestOverrides.json`, the recording
+run fails after writing and names every such key. To update or remove a stale
+override, push the updated universal baseline, inspect the hosted runner's
+`screenshot-mismatches` artifact from the CI run to verify the rendered pixels,
+and copy any still-needed runner digests from the CI job report (or remove the
+entry when the runner matches the universal baseline).
 
 After the host's next minor OS update, recording refuses until someone re-pins
-it. Change the key and the guard test beside it, then record every key:
+it. Change the key and the guard test beside it, then record every family:
 
 ```sh
-FREESIDE_RECORD_SCREENSHOTS=1 swift test --package-path app --only-use-versions-from-resolved-file --filter ScreenshotRegressionTests/surfacesMatchRecordedPixels
+bash app/scripts/record-screenshots.sh --all
 ```
 
 A recording with no diff needs nothing else. A recording with a diff is a full

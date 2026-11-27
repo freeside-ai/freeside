@@ -105,17 +105,50 @@
             let blue = try solid(.blue)
             var images = [red, blue, red].makeIterator()
             await #expect(throws: ScreenshotCapture.Failure.self) {
-                try await ScreenshotCapture.record(to: url) {
+                try await ScreenshotCapture.record {
                     var manifest = ["stable": try ScreenshotCapture.digest(red)]
                     let unstable = try await ScreenshotCapture.settled(key: "unstable") {
                         let next = images.next()
                         return try #require(next)
                     }
                     manifest["unstable"] = try ScreenshotCapture.digest(unstable)
-                    return manifest
+                    return [(url: url, manifest: manifest)]
                 }
             }
             #expect(try Data(contentsOf: url) == existing)
+        }
+
+        @Test func recordingWritesOnlyWhenBytesChange() throws {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "screenshot-manifest-noop-\(UUID()).json")
+            defer { try? FileManager.default.removeItem(at: url) }
+            let initial = ["a-large": "digest-1"]
+            #expect(try ScreenshotCapture.writeManifestIfChanged(initial, to: url))
+            let writtenBytes = try Data(contentsOf: url)
+            #expect(try !ScreenshotCapture.writeManifestIfChanged(initial, to: url))
+            #expect(try Data(contentsOf: url) == writtenBytes)
+            #expect(try ScreenshotCapture.writeManifestIfChanged(["a-large": "digest-2"], to: url))
+            #expect(try Data(contentsOf: url) != writtenBytes)
+        }
+
+        @Test func failedMultiFamilyCaptureLeavesExistingFilesUntouched() async throws {
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "screenshot-families-\(UUID())", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let first = dir.appendingPathComponent("ScreenshotDigests-a.json")
+            let second = dir.appendingPathComponent("ScreenshotDigests-b.json")
+            let firstBytes = Data("{\"a-large\": \"old-a\"}\n".utf8)
+            let secondBytes = Data("{\"b-large\": \"old-b\"}\n".utf8)
+            try firstBytes.write(to: first)
+            try secondBytes.write(to: second)
+            await #expect(throws: ProbeError.self) {
+                try await ScreenshotCapture.record {
+                    throw ProbeError.stopped
+                }
+            }
+            #expect(try Data(contentsOf: first) == firstBytes)
+            #expect(try Data(contentsOf: second) == secondBytes)
         }
 
         @Test func contrastScopeReachesAppKitAndRestoresAfterNestedFailure() throws {

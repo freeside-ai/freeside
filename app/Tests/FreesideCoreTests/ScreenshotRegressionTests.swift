@@ -130,28 +130,66 @@
 
         @Test func surfacesMatchRecordedPixels() async throws {
             _ = FreesideFont.registration
-            let recording =
-                ProcessInfo.processInfo.environment["FREESIDE_RECORD_SCREENSHOTS"] == "1"
-            let shard = try ScreenshotShard.parse(
-                ProcessInfo.processInfo.environment["FREESIDE_SCREENSHOT_SHARD"])
+            let environment = ProcessInfo.processInfo.environment
+            let recording = environment["FREESIDE_RECORD_SCREENSHOTS"] == "1"
+            let shard = try ScreenshotShard.parse(environment["FREESIDE_SCREENSHOT_SHARD"])
+            let selectedFamilies = try ScreenshotFamily.parseSelection(
+                environment["FREESIDE_SCREENSHOT_FAMILY"])
+            if shard != nil, selectedFamilies != nil {
+                throw ScreenshotError.familyAndShardConflict
+            }
             let overrides = try loadOverrides()
             if recording {
-                // The manifest is written from what was rendered, so it
-                // must come from the whole matrix.
                 guard shard == nil else { throw ScreenshotError.shardedRecordingRefused }
                 try validateRecordingHost(hosted: isHostedRunner)
                 try validateRecordingOperatingSystem(
                     operatingSystemKey, baselineKey: baselineOperatingSystemKey)
-            }
-            let expected = try loadManifest(overrides: overrides)
-            if recording {
-                let sourceURL = URL(fileURLWithPath: #filePath)
+                let targetFamilies = selectedFamilies ?? ScreenshotFamily.all
+                let targetSet = Set(targetFamilies)
+                // Validate unselected family files and reject stray family files
+                // before rendering, while skipping decode on the selected
+                // families so a file carrying merge-conflict markers can be
+                // re-recorded cleanly.
+                try verifyBundleHasNoUnknownFamilyFiles()
+                _ = try loadManifest(
+                    families: ScreenshotFamily.all.filter { !targetSet.contains($0) },
+                    overrides: [:])
+                let resourcesDir = URL(fileURLWithPath: #filePath)
                     .deletingLastPathComponent()
-                    .appendingPathComponent("Resources/ScreenshotDigests.json")
-                try await ScreenshotCapture.record(to: sourceURL) {
-                    try await captureSurfaces(expected: expected, recording: true)
+                    .appendingPathComponent("Resources", isDirectory: true)
+                let priorByFamily: [ScreenshotFamily: [String: String]?] = Dictionary(
+                    uniqueKeysWithValues: targetFamilies.map { family in
+                        let url = resourcesDir.appendingPathComponent(family.fileName)
+                        let decoded = (try? Data(contentsOf: url)).flatMap {
+                            try? JSONDecoder().decode([String: String].self, from: $0)
+                        }
+                        return (family, decoded)
+                    })
+                var recordedByFamily: [ScreenshotFamily: [String: String]] = [:]
+                try await ScreenshotCapture.record {
+                    let actual = try await captureSurfaces(
+                        expected: [:],
+                        recording: true,
+                        orderedFamilies: selectedFamilies,
+                        runMountedCountdown: false)
+                    let grouped = try ScreenshotFamily.partition(actual, allowedFamilies: targetSet)
+                    recordedByFamily = grouped
+                    return targetFamilies.map { family in
+                        (
+                            url: resourcesDir.appendingPathComponent(family.fileName),
+                            manifest: grouped[family] ?? [:]
+                        )
+                    }
+                }
+                let stale = ScreenshotFamily.staleOverrides(
+                    recordedByFamily: recordedByFamily,
+                    priorByFamily: priorByFamily,
+                    overrides: overrides)
+                if !stale.isEmpty {
+                    throw ScreenshotError.staleOverrides(stale)
                 }
             } else if let shard {
+                let expected = try loadManifest(overrides: overrides)
                 let slice = Self.shardKeys(expected.keys, index: shard.index, count: shard.count)
                 let actual = try await captureSurfaces(expected: expected, recording: false) { key in
                     // A key the manifest lacks renders in slice 0 alone, so
@@ -165,7 +203,23 @@
                 if shard.index == 0 {
                     expectWholeMatrix(expected)
                 }
+            } else if let selectedFamilies {
+                // Decode every family file so a conflicted or broken file fails
+                // loudly on comparison, then compare only the selected families.
+                _ = try loadManifest(overrides: [:])
+                let expected = try loadManifest(families: selectedFamilies, overrides: overrides)
+                let actual = try await captureSurfaces(
+                    expected: expected,
+                    recording: false,
+                    orderedFamilies: selectedFamilies,
+                    runMountedCountdown: false)
+                let extraExpected = Set(expected.keys).subtracting(actual.keys).sorted()
+                #expect(
+                    extraExpected.isEmpty,
+                    "Recorded digest keys not rendered by selected families: \(extraExpected.joined(separator: ", "))")
+                #expect(actual.count == expected.count)
             } else {
+                let expected = try loadManifest(overrides: overrides)
                 let actual = try await captureSurfaces(expected: expected, recording: false)
                 #expect(actual.count == expected.count)
                 expectWholeMatrix(actual)
@@ -194,9 +248,23 @@
         /// inserts every light surface.
         @Test func insertingASurfaceUnderAnAssistiveClientDoesNotRecurse() async throws {
             guard let timeZone = TimeZone(secondsFromGMT: 0) else { throw ScreenshotError.missingGMT }
-            let shard = try ScreenshotShard.parse(
-                ProcessInfo.processInfo.environment["FREESIDE_SCREENSHOT_SHARD"])
-            let surfaces = try await insertionSurfaces()
+            let environment = ProcessInfo.processInfo.environment
+            let shard = try ScreenshotShard.parse(environment["FREESIDE_SCREENSHOT_SHARD"])
+            let selectedFamilies = try ScreenshotFamily.parseSelection(
+                environment["FREESIDE_SCREENSHOT_FAMILY"])
+            if shard != nil, selectedFamilies != nil {
+                throw ScreenshotError.familyAndShardConflict
+            }
+            let allSurfaces = try await insertionSurfaces()
+            let surfaces: [Surface]
+            if let selectedFamilies {
+                let allowed = Set(selectedFamilies)
+                surfaces = try allSurfaces.filter {
+                    allowed.contains(try ScreenshotFamily.family(ofSurface: $0.name))
+                }
+            } else {
+                surfaces = allSurfaces
+            }
             let slice = shard.map {
                 Self.shardKeys(surfaces.map(\.name), index: $0.index, count: $0.count)
             }
@@ -233,83 +301,114 @@
         private func captureSurfaces(
             expected: [String: String],
             recording: Bool,
+            orderedFamilies: [ScreenshotFamily]? = nil,
+            runMountedCountdown: Bool = true,
             rendersKey: (String) -> Bool = { _ in true }
         ) async throws -> [String: String] {
             var actual: [String: String] = [:]
+            let allowedFamilies = orderedFamilies.map(Set.init)
 
             for size in textSizes where Self.lightMatrixSizes.contains(size.name) {
                 try await FreesideFont.$screenshotDynamicTypeSize.withValue(size.value) {
-                    for surface in try await makeSurfaces(at: size.value)
-                    where Self.matrixSizeNames(for: surface.name, colorScheme: surface.colorScheme)
-                        .contains(size.name)
-                    {
-                        let key = "\(surface.name)-\(size.name)"
-                        guard rendersKey(key) else { continue }
-                        let image = try await render(
-                            surface.view,
-                            at: size.value,
-                            width: surface.width ?? canvasWidth,
-                            colorScheme: surface.colorScheme,
-                            contrast: surface.contrast,
-                            nativeAppearance: surface.nativeAppearance, key: key)
-                        actual[key] = try digest(image)
-                        if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
-                            _ = try dump(image, named: key)
-                        }
-                        if !recording, expected[key] != actual[key] {
-                            let dump = try dump(image, named: key)
-                            let expectedDigest = expected[key] ?? "missing"
-                            let actualDigest = actual[key] ?? "missing"
-                            Issue.record(
-                                "Screenshot mismatch for \(key): expected \(expectedDigest), got \(actualDigest); inspect \(dump.path) and record only after review."
-                            )
-                        }
-                        await Task.yield()
+                    let primary = try await makeSurfaces(at: size.value).filter {
+                        Self.matrixSizeNames(for: $0.name, colorScheme: $0.colorScheme).contains(size.name)
                     }
-
-                    for supplemental in [
+                    let supplementals = [
                         try await makeUnavailableAttachmentSurface(at: size.value),
                         try await makeImageAttachmentSurface(at: size.value),
-                    ]
-                    where Self.matrixSizeNames(for: supplemental.name, colorScheme: supplemental.colorScheme)
-                        .contains(size.name)
-                    {
-                        let key = "\(supplemental.name)-\(size.name)"
-                        guard rendersKey(key) else { continue }
-                        let image = try await render(
-                            supplemental.view,
-                            at: size.value,
-                            width: supplemental.width ?? canvasWidth,
-                            colorScheme: supplemental.colorScheme, key: key)
-                        actual[key] = try digest(image)
-                        if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
-                            _ = try dump(image, named: key)
+                    ].filter {
+                        Self.matrixSizeNames(for: $0.name, colorScheme: $0.colorScheme).contains(size.name)
+                    }
+
+                    struct RenderItem {
+                        let surface: Surface
+                        let key: String
+                        let family: ScreenshotFamily
+                        let isSupplemental: Bool
+                    }
+
+                    var items: [RenderItem] = []
+                    items.reserveCapacity(primary.count + supplementals.count)
+                    for surface in primary {
+                        let family = try ScreenshotFamily.family(ofSurface: surface.name)
+                        items.append(
+                            RenderItem(
+                                surface: surface, key: "\(surface.name)-\(size.name)",
+                                family: family, isSupplemental: false))
+                    }
+                    for surface in supplementals {
+                        let family = try ScreenshotFamily.family(ofSurface: surface.name)
+                        items.append(
+                            RenderItem(
+                                surface: surface, key: "\(surface.name)-\(size.name)",
+                                family: family, isSupplemental: true))
+                    }
+
+                    let orderedItems: [RenderItem]
+                    if let orderedFamilies {
+                        var byFamily: [ScreenshotFamily: [RenderItem]] = [:]
+                        for item in items where allowedFamilies?.contains(item.family) ?? true {
+                            byFamily[item.family, default: []].append(item)
                         }
-                        if !recording, expected[key] != actual[key] {
-                            let dump = try dump(image, named: key)
-                            let expectedDigest = expected[key] ?? "missing"
-                            let actualDigest = actual[key] ?? "missing"
+                        orderedItems = orderedFamilies.flatMap { byFamily[$0] ?? [] }
+                    } else {
+                        orderedItems = items
+                    }
+
+                    for item in orderedItems {
+                        guard rendersKey(item.key) else { continue }
+                        let image: CGImage
+                        if item.isSupplemental {
+                            image = try await render(
+                                item.surface.view,
+                                at: size.value,
+                                width: item.surface.width ?? canvasWidth,
+                                colorScheme: item.surface.colorScheme,
+                                key: item.key)
+                        } else {
+                            image = try await render(
+                                item.surface.view,
+                                at: size.value,
+                                width: item.surface.width ?? canvasWidth,
+                                colorScheme: item.surface.colorScheme,
+                                contrast: item.surface.contrast,
+                                nativeAppearance: item.surface.nativeAppearance,
+                                key: item.key)
+                        }
+                        actual[item.key] = try digest(image)
+                        if ProcessInfo.processInfo.environment["FREESIDE_DUMP_SCREENSHOTS"] == "1" {
+                            _ = try dump(image, named: item.key)
+                        }
+                        if !recording, expected[item.key] != actual[item.key] {
+                            let dump = try dump(image, named: item.key)
+                            let expectedDigest = expected[item.key] ?? "missing"
+                            let actualDigest = actual[item.key] ?? "missing"
                             Issue.record(
-                                "Screenshot mismatch for \(key): expected \(expectedDigest), got \(actualDigest); inspect \(dump.path) and record only after review."
+                                "Screenshot mismatch for \(item.key): expected \(expectedDigest), got \(actualDigest); inspect \(dump.path) and record only after review."
                             )
+                        }
+                        if !item.isSupplemental {
+                            await Task.yield()
                         }
                     }
                 }
             }
 
-            // Exercise the mounted countdown after the complete matrix so
-            // this check also covers rendering state left by other surfaces.
-            // A slice runs it after its own renders only, half the state at
-            // CI's two slices.
-            guard
-                let pairingRepetitions = Int(
-                    ProcessInfo.processInfo.environment["FREESIDE_PAIRING_PROBE_REPETITIONS"] ?? "1"),
-                pairingRepetitions > 0
-            else { throw ScreenshotError.invalidDiagnosticSelection }
-            for repetition in 0..<pairingRepetitions {
-                if pairingRepetitions > 1 { print("PAIRING_PROBE repetition=\(repetition + 1)") }
-                for remaining in [30.0, 270.0, 330.0, 870.0] {
-                    try mountedTimelineMatchesWallClock(remaining: remaining)
+            if runMountedCountdown {
+                // Exercise the mounted countdown after the complete matrix so
+                // this check also covers rendering state left by other surfaces.
+                // A slice runs it after its own renders only, half the state at
+                // CI's two slices.
+                guard
+                    let pairingRepetitions = Int(
+                        ProcessInfo.processInfo.environment["FREESIDE_PAIRING_PROBE_REPETITIONS"] ?? "1"),
+                    pairingRepetitions > 0
+                else { throw ScreenshotError.invalidDiagnosticSelection }
+                for repetition in 0..<pairingRepetitions {
+                    if pairingRepetitions > 1 { print("PAIRING_PROBE repetition=\(repetition + 1)") }
+                    for remaining in [30.0, 270.0, 330.0, 870.0] {
+                        try mountedTimelineMatchesWallClock(remaining: remaining)
+                    }
                 }
             }
 
@@ -526,6 +625,160 @@
             #expect(throws: ScreenshotError.self) {
                 try digestFileURL(named: "NoSuchDigestFile")
             }
+        }
+
+        @Test func everyMatrixSurfaceBelongsToOneFamilyAndFamilyFilesCoverTheMatrix() async throws {
+            let names = ScreenshotFamily.all.map(\.name)
+            #expect(Set(names).count == names.count, "duplicate family names in ScreenshotFamily.all")
+            let allPrefixes = ScreenshotFamily.all.flatMap(\.prefixes)
+            #expect(Set(allPrefixes).count == allPrefixes.count, "duplicate prefixes in ScreenshotFamily.all")
+            try verifyBundleHasNoUnknownFamilyFiles()
+
+            let primary = try await makeSurfaces(at: .large)
+            let supplementals = [
+                try await makeUnavailableAttachmentSurface(at: .large),
+                try await makeImageAttachmentSurface(at: .large),
+            ]
+            var matrixKeys: Set<String> = []
+            for surface in primary + supplementals {
+                _ = try ScreenshotFamily.family(ofSurface: surface.name)
+                for sizeName in Self.matrixSizeNames(for: surface.name, colorScheme: surface.colorScheme) {
+                    matrixKeys.insert("\(surface.name)-\(sizeName)")
+                }
+            }
+
+            var seenKeys: Set<String> = []
+            for family in ScreenshotFamily.all {
+                let familyKeys = Set(try loadManifest(families: [family], overrides: [:]).keys)
+                #expect(!familyKeys.isEmpty, "family '\(family.name)' has no recorded keys")
+                #expect(seenKeys.isDisjoint(with: familyKeys), "family '\(family.name)' shares keys with another file")
+                seenKeys.formUnion(familyKeys)
+            }
+            #expect(seenKeys == matrixKeys)
+        }
+
+        @Test func familyValidationRejectsUnclassifiedAmbiguousMisplacedDuplicateAndUnknownFiles() throws {
+            do {
+                _ = try ScreenshotFamily.family(ofSurface: "unlisted-new-surface")
+                Issue.record("An unclassified surface must fail")
+            } catch let error as ScreenshotFamilyError {
+                #expect(error == .unclassifiedSurface("unlisted-new-surface"))
+                #expect(error.description.contains("ScreenshotFamily.all"))
+            }
+
+            let overlapping = [
+                ScreenshotFamily(name: "alpha", prefixes: ["shared"]),
+                ScreenshotFamily(name: "beta", prefixes: ["shared"]),
+            ]
+            #expect(throws: ScreenshotFamilyError.ambiguousSurface("shared-card", families: ["alpha", "beta"])) {
+                try ScreenshotFamily.family(ofSurface: "shared-card", in: overlapping)
+            }
+
+            let alpha = ScreenshotFamily(name: "alpha", prefixes: ["alpha"])
+            let beta = ScreenshotFamily(name: "beta", prefixes: ["beta"])
+            #expect(
+                throws: ScreenshotFamilyError.misplacedDigestKey(
+                    key: "beta-card-large", expectedFamily: "beta", actualFile: "ScreenshotDigests-alpha.json")
+            ) {
+                try ScreenshotFamily.mergeDecodedFiles(
+                    [(family: alpha, digests: ["beta-card-large": "deadbeef"])],
+                    in: [alpha, beta])
+            }
+            #expect(
+                throws: ScreenshotFamilyError.duplicateDigestKey(
+                    key: "alpha-card-large",
+                    files: ["ScreenshotDigests-alpha.json", "ScreenshotDigests-alpha.json"])
+            ) {
+                try ScreenshotFamily.mergeDecodedFiles(
+                    [
+                        (family: alpha, digests: ["alpha-card-large": "aaa"]),
+                        (family: alpha, digests: ["alpha-card-large": "bbb"]),
+                    ],
+                    in: [alpha, beta])
+            }
+            #expect(throws: ScreenshotFamilyError.unknownDigestFile("ScreenshotDigests-stray.json")) {
+                try ScreenshotFamily.validateResourceFileNames(
+                    ["ScreenshotDigests-alpha.json", "ScreenshotDigests-stray.json", "ScreenshotDigestOverrides.json"],
+                    in: [alpha, beta])
+            }
+
+            let readersControls = try #require(ScreenshotFamily.byName["readers-controls"])
+            #expect(throws: ScreenshotFamilyError.unclassifiedSurface("unlisted-override-large")) {
+                try loadManifest(
+                    families: [readersControls],
+                    overrides: [operatingSystemKey: ["unlisted-override-large": "deadbeef"]],
+                    hosted: true)
+            }
+            let scoped = try loadManifest(
+                families: [readersControls],
+                overrides: [
+                    operatingSystemKey: [
+                        "choice-list-large": "override-readers",
+                        "unified-list-large": "override-inbox",
+                    ]
+                ],
+                hosted: true)
+            #expect(scoped["choice-list-large"] == "override-readers")
+            #expect(scoped["unified-list-large"] == nil)
+        }
+
+        @Test func familySelectionParsesValidListsAndRejectsEmptyOrUnknown() throws {
+            #expect(try ScreenshotFamily.parseSelection(nil) == nil)
+            let first = try #require(ScreenshotFamily.byName["inbox-list"])
+            let second = try #require(ScreenshotFamily.byName["composers"])
+            #expect(try ScreenshotFamily.parseSelection("inbox-list") == [first])
+            #expect(try ScreenshotFamily.parseSelection("composers,inbox-list,composers") == [second, first])
+            for invalid in ["", " ", "no-such-family", "inbox-list,", ",inbox-list", "inbox-list,,composers"] {
+                #expect(throws: ScreenshotFamilyError.self) {
+                    try ScreenshotFamily.parseSelection(invalid)
+                }
+            }
+        }
+
+        @Test func staleOverrideCheckFlagsChangedAndUnreadableOverriddenKeys() throws {
+            let alpha = ScreenshotFamily(name: "alpha", prefixes: ["alpha"])
+            let beta = ScreenshotFamily(name: "beta", prefixes: ["beta"])
+            let overrides = [
+                "macOS-27.2": [
+                    "alpha-unchanged-large": "runner-1",
+                    "alpha-changed-large": "runner-2",
+                    "alpha-removed-large": "runner-3",
+                    "beta-conflicted-large": "runner-4",
+                ],
+                "macOS-26.7": [
+                    "alpha-changed-large": "runner-old"
+                ],
+            ]
+            let stale = ScreenshotFamily.staleOverrides(
+                recordedByFamily: [
+                    alpha: ["alpha-unchanged-large": "same", "alpha-changed-large": "new"],
+                    beta: ["beta-conflicted-large": "fresh"],
+                ],
+                priorByFamily: [
+                    alpha: [
+                        "alpha-unchanged-large": "same",
+                        "alpha-changed-large": "old",
+                        "alpha-removed-large": "gone",
+                    ],
+                    beta: nil,
+                ],
+                overrides: overrides)
+            #expect(
+                stale == [
+                    .init(key: "alpha-changed-large", operatingSystems: ["macOS-26.7", "macOS-27.2"]),
+                    .init(key: "alpha-removed-large", operatingSystems: ["macOS-27.2"]),
+                    .init(key: "beta-conflicted-large", operatingSystems: ["macOS-27.2"]),
+                ])
+            let message = ScreenshotError.staleOverrides(stale).description
+            #expect(message.contains("alpha-changed-large"))
+            #expect(message.contains("screenshot-mismatches"))
+            #expect(message.contains("app/README.md"))
+            #expect(
+                ScreenshotFamily.staleOverrides(
+                    recordedByFamily: [alpha: ["alpha-changed-large": "new"]],
+                    priorByFamily: [alpha: ["alpha-changed-large": "old"]],
+                    overrides: [:]
+                ).isEmpty)
         }
 
         @Test func shardsPartitionTheManifest() throws {
@@ -6215,15 +6468,34 @@
         /// The current macOS 27 runner passes without one; a local run
         /// always uses the universal baseline.
         private func loadManifest(
-            overrides: [String: [String: String]]
+            families: [ScreenshotFamily] = ScreenshotFamily.all,
+            overrides: [String: [String: String]],
+            hosted: Bool? = nil
         ) throws -> [String: String] {
-            let url = try digestFileURL(named: "ScreenshotDigests")
-            let baseline = try JSONDecoder().decode(
-                [String: String].self, from: Data(contentsOf: url))
-            let applicable = isHostedRunner ? overrides[operatingSystemKey] ?? [:] : [:]
-            return baseline.merging(applicable) { _, override in
+            try verifyBundleHasNoUnknownFamilyFiles()
+            var decoded: [(family: ScreenshotFamily, digests: [String: String])] = []
+            decoded.reserveCapacity(families.count)
+            for family in families {
+                let url = try digestFileURL(named: family.resourceName)
+                let digests = try JSONDecoder().decode(
+                    [String: String].self, from: Data(contentsOf: url))
+                decoded.append((family: family, digests: digests))
+            }
+            let baseline = try ScreenshotFamily.mergeDecodedFiles(decoded)
+            let applicable = (hosted ?? isHostedRunner) ? overrides[operatingSystemKey] ?? [:] : [:]
+            guard !applicable.isEmpty else { return baseline }
+            let familySet = Set(families)
+            let scoped = try applicable.filter { key, _ in
+                familySet.contains(try ScreenshotFamily.family(ofKey: key))
+            }
+            return baseline.merging(scoped) { _, override in
                 override
             }
+        }
+
+        private func verifyBundleHasNoUnknownFamilyFiles() throws {
+            let urls = Bundle.module.urls(forResourcesWithExtension: "json", subdirectory: nil) ?? []
+            try ScreenshotFamily.validateResourceFileNames(urls.map(\.lastPathComponent))
         }
 
         private var isHostedRunner: Bool {
@@ -6289,8 +6561,9 @@
         }
     }
 
-    private enum ScreenshotError: Error {
+    private enum ScreenshotError: Error, CustomStringConvertible {
         case diagnosticRecordingRefused
+        case familyAndShardConflict
         case invalidDiagnosticSelection
         case invalidShardSelection(String)
         case missingActiveRun
@@ -6306,5 +6579,50 @@
         case recordingRequiresBaselineOperatingSystem(expected: String, actual: String)
         case renderFailed
         case shardedRecordingRefused
+        case staleOverrides([ScreenshotFamily.StaleOverride])
+
+        var description: String {
+            switch self {
+            case .diagnosticRecordingRefused:
+                return "Recording is refused during diagnostic screenshot probes."
+            case .familyAndShardConflict:
+                return "FREESIDE_SCREENSHOT_FAMILY cannot be combined with FREESIDE_SCREENSHOT_SHARD."
+            case .invalidDiagnosticSelection:
+                return "Invalid diagnostic screenshot selection."
+            case .invalidShardSelection(let value):
+                return "Invalid FREESIDE_SCREENSHOT_SHARD selection '\(value)'."
+            case .missingActiveRun:
+                return "Missing active run fixture."
+            case .missingActiveTimeline:
+                return "Missing active timeline fixture."
+            case .missingReadyTimeline:
+                return "Missing ready timeline fixture."
+            case .missingDigestFile(let name):
+                return "Missing screenshot digest resource '\(name).json'."
+            case .missingRetryTask:
+                return "Missing retry task fixture."
+            case .missingGMT:
+                return "GMT timezone unavailable."
+            case .missingSeededImage:
+                return "Missing seeded image fixture."
+            case .pngEncodingFailed:
+                return "Failed to encode screenshot PNG."
+            case .preferencesUnavailable:
+                return "Temporary screenshot preferences suite unavailable."
+            case .recordingRefusedOnHostedRunner:
+                return "Recording screenshot baselines is refused on hosted CI runners."
+            case .recordingRequiresBaselineOperatingSystem(let expected, let actual):
+                return "Recording screenshot baselines requires \(expected), got \(actual)."
+            case .renderFailed:
+                return "Failed to render screenshot surface."
+            case .shardedRecordingRefused:
+                return "Recording screenshot baselines cannot be combined with FREESIDE_SCREENSHOT_SHARD."
+            case .staleOverrides(let stale):
+                let summary = stale.map { "\($0.key) (\($0.operatingSystems.joined(separator: ", ")))" }
+                    .joined(separator: ", ")
+                return
+                    "Recorded baselines changed keys with entries in ScreenshotDigestOverrides.json: \(summary). Refresh or remove those overrides from the CI job report after inspecting the screenshot-mismatches artifact (see app/README.md)."
+            }
+        }
     }
 #endif

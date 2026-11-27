@@ -193,7 +193,15 @@ import sys
 
 output, root = map(pathlib.Path, sys.argv[1:3])
 runs, probes_only = map(int, sys.argv[3:5])
-expected = json.loads((root / 'app/Tests/FreesideCoreTests/Resources/ScreenshotDigests.json').read_text())
+resources = root / 'app/Tests/FreesideCoreTests/Resources'
+manifest_files = sorted(resources.glob('ScreenshotDigests-*.json'))
+assert manifest_files, 'no ScreenshotDigests-*.json family files found'
+expected = {}
+for path in manifest_files:
+    family_digests = json.loads(path.read_text())
+    overlap_keys = set(expected) & set(family_digests)
+    assert not overlap_keys, f'duplicate keys across family files ({path.name}): {sorted(overlap_keys)[:5]}'
+    expected.update(family_digests)
 rows = {fields[0]: tuple(map(int, fields[1:])) for fields in
         (line.split('\t') for line in (output / 'results.tsv').read_text().splitlines())}
 probes = ['selected', 'reverse', 'construct', 'render', 'process-standard', 'process-increased']
