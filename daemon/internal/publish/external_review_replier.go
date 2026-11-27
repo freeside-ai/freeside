@@ -19,12 +19,14 @@ import (
 )
 
 const (
-	// ExternalReplyIntentKind and ExternalReplyOutcomeKind are package-owned
-	// outbox records. They contain no artifact references.
-	ExternalReplyIntentKind   = "publish.external_review_reply_intent"
-	ExternalReplyOutcomeKind  = "publish.external_review_reply_outcome"
-	externalReplySettle       = 10 * time.Minute
-	externalReplyAttemptBound = 3
+	// ExternalReplyIntentKind, ExternalReplyOutcomeKind, and
+	// ExternalReviewThreadResolutionKind are package-owned outbox records.
+	// They contain no artifact references.
+	ExternalReplyIntentKind            = "publish.external_review_reply_intent"
+	ExternalReplyOutcomeKind           = "publish.external_review_reply_outcome"
+	ExternalReviewThreadResolutionKind = "publish.external_review_thread_resolution"
+	externalReplySettle                = 10 * time.Minute
+	externalReplyAttemptBound          = 3
 )
 
 type externalReplyIntent struct {
@@ -60,11 +62,20 @@ type externalReplyOutcome struct {
 }
 
 const (
-	externalReplyRefused    = "external_review_reply_refused"
-	externalReplyAmbiguous  = "external_review_reply_ambiguous"
-	externalReplyUnreadable = "external_review_reply_unreadable"
-	externalReplyRevoked    = "external_review_reply_not_admitted"
+	externalReplyRefused          = "external_review_reply_refused"
+	externalReplyAmbiguous        = "external_review_reply_ambiguous"
+	externalReplyUnreadable       = "external_review_reply_unreadable"
+	externalReplyRevoked          = "external_review_reply_not_admitted"
+	externalReplyThreadUnresolved = "external_review_thread_unresolved"
 )
+
+type externalReviewThreadResolution struct {
+	FindingID domain.FindingID `json:"finding_id"`
+	Round     int              `json:"round"`
+	// Code is empty when the thread is resolved, or
+	// externalReplyThreadUnresolved when resolution failed permanently.
+	Code string `json:"code"`
+}
 
 func decodeExternalReplyIntent(entry store.QueueEntry) (externalReplyIntent, error) {
 	var i externalReplyIntent
@@ -102,6 +113,23 @@ func decodeExternalReplyOutcome(entry store.QueueEntry) (externalReplyOutcome, e
 		return o, errors.New("review reply: invalid outcome")
 	}
 	return o, nil
+}
+
+func decodeExternalReviewThreadResolution(entry store.QueueEntry) (externalReviewThreadResolution, error) {
+	var r externalReviewThreadResolution
+	if entry.Kind != ExternalReviewThreadResolutionKind || strictjson.Decode(entry.Payload, &r, strictjson.TolerateInvalidUTF8, strictjson.NoLimit) != nil ||
+		r.FindingID == "" || r.Round < 1 || entry.IdempotencyKey != externalReplyKey(r.FindingID, r.Round)+"/resolve" ||
+		(r.Code != "" && r.Code != externalReplyThreadUnresolved) {
+		return r, errors.New("review reply: invalid thread resolution")
+	}
+	return r, nil
+}
+
+// ExternalReviewThreadResolutionBackupPayloadDigests validates a thread
+// resolution record before backup accepts the outbox as complete.
+func ExternalReviewThreadResolutionBackupPayloadDigests(entry store.QueueEntry) ([]domain.Digest, error) {
+	_, err := decodeExternalReviewThreadResolution(entry)
+	return nil, err
 }
 
 type externalReplyCollection struct {
@@ -348,16 +376,178 @@ func replyHeadReviewed(ctx context.Context, tx *store.ReadTx, d domain.ExternalF
 	return nil
 }
 
+type externalReviewThreadTarget struct {
+	repo     repoRef
+	prNumber int
+	root     int64
+}
+
+func reviewDispositionAllowsThreadResolution(disposition domain.ReviewDisposition) bool {
+	switch disposition {
+	case domain.ReviewDispositionDeclined, domain.ReviewDispositionDeferred:
+		return true
+	case domain.ReviewDispositionFixed:
+		return false
+	}
+	return false
+}
+
+// reviewThreadResolutionTarget is the Tier A gate deciding whether a posted
+// external review reply should now resolve its inline GitHub review thread. It
+// re-checks, in cheapest-first order:
+//   - that outcomeRow decodes to a posted reply (empty Code, CommentID > 0) for
+//     d's finding and round, and that d.Disposition is declined or deferred;
+//   - that no resolution row already exists at key+"/resolve" (decoding and
+//     verifying any existing row so corruption fails closed);
+//   - that the run's workflow is still open (RequireRunWorkflowOpen) and the
+//     finding's reviewer is still admitted by the active trust profile
+//     (GetAdmittedExternalFinding);
+//   - that the finding names an inline review thread (root > 0);
+//   - that the reply's intent at key decodes, is dispatched, matches the
+//     finding's run, round, disposition, and thread, and still authenticates
+//     against its pinned ReadyItemPRBinding via replyCollection;
+//   - that every other external finding in the same inline thread (excluding
+//     Freeside's own replies authored by intent.BotID) has a highest-round
+//     declined or deferred disposition with a decoded posted-reply outcome
+//     (empty Code, CommentID > 0).
+func reviewThreadResolutionTarget(ctx context.Context, tx *store.ReadTx, run domain.Run, d domain.ExternalFindingDisposition, outcomeRow store.QueueEntry) (externalReviewThreadTarget, bool, error) {
+	outcome, err := decodeExternalReplyOutcome(outcomeRow)
+	if err != nil {
+		return externalReviewThreadTarget{}, false, err
+	}
+	if outcome.FindingID != d.FindingID || outcome.Round != d.Round {
+		return externalReviewThreadTarget{}, false, errors.New("review reply: outcome identity changed")
+	}
+	if outcome.Code != "" || outcome.CommentID <= 0 {
+		return externalReviewThreadTarget{}, false, nil
+	}
+	if !reviewDispositionAllowsThreadResolution(d.Disposition) {
+		return externalReviewThreadTarget{}, false, nil
+	}
+	key := externalReplyKey(d.FindingID, d.Round)
+	resolveRow, err := tx.GetOutbox(ctx, key+"/resolve")
+	if err == nil {
+		res, err := decodeExternalReviewThreadResolution(resolveRow)
+		if err != nil {
+			return externalReviewThreadTarget{}, false, err
+		}
+		if res.FindingID != d.FindingID || res.Round != d.Round || !resolveRow.Dispatched() {
+			return externalReviewThreadTarget{}, false, errors.New("review reply: thread resolution identity changed")
+		}
+		return externalReviewThreadTarget{}, false, nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return externalReviewThreadTarget{}, false, err
+	}
+	if err := tx.RequireRunWorkflowOpen(ctx, run.ID); err != nil {
+		if errors.Is(err, store.ErrTaskWorkflowClosed) {
+			return externalReviewThreadTarget{}, false, nil
+		}
+		return externalReviewThreadTarget{}, false, err
+	}
+	finding, err := tx.GetAdmittedExternalFinding(ctx, d.FindingID)
+	if err != nil {
+		if errors.Is(err, domain.ErrExternalReviewNotAdmitted) {
+			return externalReviewThreadTarget{}, false, nil
+		}
+		return externalReviewThreadTarget{}, false, err
+	}
+	thread, err := parseExternalReplyThread(finding.External.ThreadID)
+	if err != nil {
+		return externalReviewThreadTarget{}, false, err
+	}
+	if thread.root <= 0 {
+		return externalReviewThreadTarget{}, false, nil
+	}
+	intentRow, err := tx.GetOutbox(ctx, key)
+	if err != nil {
+		return externalReviewThreadTarget{}, false, err
+	}
+	intent, err := decodeExternalReplyIntent(intentRow)
+	if err != nil {
+		return externalReviewThreadTarget{}, false, err
+	}
+	if !intentRow.Dispatched() || intent.FindingID != d.FindingID || intent.RunID != d.RunID || intent.RunID != run.ID ||
+		intent.Round != d.Round || intent.Disposition != d.Disposition || intent.Thread != finding.External.ThreadID {
+		return externalReviewThreadTarget{}, false, errors.New("review reply: source identity changed")
+	}
+	collection, err := replyCollection(ctx, tx, intent)
+	if err != nil {
+		return externalReviewThreadTarget{}, false, err
+	}
+	if collection.root != thread.root {
+		return externalReviewThreadTarget{}, false, errors.New("review reply: source identity changed")
+	}
+	repo, err := parseRepo(intent.Repo)
+	if err != nil {
+		return externalReviewThreadTarget{}, false, err
+	}
+	// Multiple inline comments in one thread each become a finding sharing
+	// ThreadID. Do not collapse the thread while any other finding (aside from
+	// Freeside's own replies) still needs it open or has not yet settled.
+	findings, err := tx.ListExternalFindings(ctx, run.ID)
+	if err != nil {
+		return externalReviewThreadTarget{}, false, err
+	}
+	var siblings []domain.Finding
+	for _, g := range findings {
+		if g.External == nil || g.External.ThreadID != finding.External.ThreadID || g.ID == d.FindingID {
+			continue
+		}
+		if g.External.ReviewerAccountID == intent.BotID {
+			continue
+		}
+		siblings = append(siblings, g)
+	}
+	if len(siblings) > 0 {
+		dispositions, err := tx.ListExternalFindingDispositions(ctx, run.ID)
+		if err != nil {
+			return externalReviewThreadTarget{}, false, err
+		}
+		latest := make(map[domain.FindingID]domain.ExternalFindingDisposition, len(dispositions))
+		for _, other := range dispositions {
+			if prev, ok := latest[other.FindingID]; !ok || other.Round > prev.Round {
+				latest[other.FindingID] = other
+			}
+		}
+		for _, g := range siblings {
+			other, ok := latest[g.ID]
+			if !ok || !reviewDispositionAllowsThreadResolution(other.Disposition) {
+				return externalReviewThreadTarget{}, false, nil
+			}
+			otherOutcomeRow, err := tx.GetOutbox(ctx, externalReplyKey(g.ID, other.Round)+"/outcome")
+			if errors.Is(err, store.ErrNotFound) {
+				return externalReviewThreadTarget{}, false, nil
+			}
+			if err != nil {
+				return externalReviewThreadTarget{}, false, err
+			}
+			otherOutcome, err := decodeExternalReplyOutcome(otherOutcomeRow)
+			if err != nil {
+				return externalReviewThreadTarget{}, false, err
+			}
+			if otherOutcome.FindingID != g.ID || otherOutcome.Round != other.Round {
+				return externalReviewThreadTarget{}, false, errors.New("review reply: outcome identity changed")
+			}
+			if otherOutcome.Code != "" || otherOutcome.CommentID <= 0 {
+				return externalReviewThreadTarget{}, false, nil
+			}
+		}
+	}
+	return externalReviewThreadTarget{repo: repo, prNumber: collection.prNumber, root: collection.root}, true, nil
+}
+
 func (r *ExternalReviewReplier) drive(ctx context.Context, run domain.Run, d domain.ExternalFindingDisposition) error {
 	key := externalReplyKey(d.FindingID, d.Round)
 	var entry store.QueueEntry
 	var source externalReplySource
-	var done bool
+	var resolveTarget externalReviewThreadTarget
+	var hasOutcome, resolveDue bool
 	err := r.store.Read(ctx, func(tx *store.ReadTx) error {
 		outcome, err := tx.GetOutbox(ctx, key+"/outcome")
 		if err == nil {
-			_, err = ExternalReplyBackupPayloadDigests(outcome)
-			done = err == nil
+			hasOutcome = true
+			resolveTarget, resolveDue, err = reviewThreadResolutionTarget(ctx, tx, run, d, outcome)
 			return err
 		}
 		if !errors.Is(err, store.ErrNotFound) {
@@ -383,7 +573,13 @@ func (r *ExternalReviewReplier) drive(ctx context.Context, run domain.Run, d dom
 		}
 		return err
 	})
-	if done {
+	if hasOutcome {
+		if err != nil {
+			return err
+		}
+		if resolveDue {
+			return r.resolve(ctx, run, d, resolveTarget)
+		}
 		return nil
 	}
 	if errors.Is(err, domain.ErrExternalReviewNotAdmitted) {
@@ -422,6 +618,77 @@ func (r *ExternalReviewReplier) drive(ctx context.Context, run domain.Run, d dom
 		return r.settle(ctx, run, d, intent)
 	}
 	return r.send(ctx, run, d, source, intent)
+}
+
+func (r *ExternalReviewReplier) resolve(ctx context.Context, run domain.Run, d domain.ExternalFindingDisposition, target externalReviewThreadTarget) error {
+	key := externalReplyKey(d.FindingID, d.Round)
+	resolveKey := key + "/resolve"
+	r.mu.Lock()
+	retryAfter := r.retryAfter[resolveKey]
+	r.mu.Unlock()
+	if r.now().Before(retryAfter) {
+		return nil
+	}
+	result, err := r.forge.resolveReviewThread(ctx, target.repo, target.prNumber, target.root)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	var code string
+	switch result {
+	case reviewThreadResolved:
+		code = ""
+	case reviewThreadRetry:
+		r.mu.Lock()
+		r.attempts[resolveKey]++
+		attempts := r.attempts[resolveKey]
+		if attempts < externalReplyAttemptBound {
+			r.retryAfter[resolveKey] = r.now().Add(time.Minute)
+			r.mu.Unlock()
+			return nil
+		}
+		r.mu.Unlock()
+		code = externalReplyThreadUnresolved
+	case reviewThreadFailed:
+		code = externalReplyThreadUnresolved
+	}
+	if !result.valid() {
+		return unhandledReviewThreadResolutionResult(result)
+	}
+	payload, err := json.Marshal(externalReviewThreadResolution{
+		FindingID: d.FindingID,
+		Round:     d.Round,
+		Code:      code,
+	})
+	if err != nil {
+		return err
+	}
+	return r.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.RequireRunWorkflowOpen(ctx, run.ID); err != nil {
+			if errors.Is(err, store.ErrTaskWorkflowClosed) {
+				return nil
+			}
+			return err
+		}
+		row, _, err := tx.RecordDispatchedOutbox(ctx, resolveKey, ExternalReviewThreadResolutionKind, payload)
+		if err != nil {
+			return err
+		}
+		res, err := decodeExternalReviewThreadResolution(row)
+		if err != nil {
+			return err
+		}
+		if res.Code != "" {
+			return r.putNotice(ctx, tx, run, key, res.Code,
+				"Freeside replied to this finding but could not resolve its review thread. Resolve it on the pull request by hand; Freeside will not try again.")
+		}
+		return nil
+	})
 }
 
 // A pending reply was never sent or was released after a proven rejection.

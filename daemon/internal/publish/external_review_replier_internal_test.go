@@ -21,21 +21,36 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
+type replyHarnessThread struct {
+	id         string
+	root       int64
+	isResolved bool
+}
+
 type replyHarness struct {
-	t             *testing.T
-	f             replyBindingFixture
-	r             *ExternalReviewReplier
-	now           time.Time
-	d             domain.ExternalFindingDisposition
-	second        domain.ExternalFindingDisposition
-	authority     domain.PublicationSuccessor
-	comments      []replyCommentWire
-	bodies        []string
-	creates       int
-	status        int
-	commitUnknown bool
-	step          func(string)
-	beforeSend    func()
+	t                *testing.T
+	f                replyBindingFixture
+	r                *ExternalReviewReplier
+	now              time.Time
+	d                domain.ExternalFindingDisposition
+	second           domain.ExternalFindingDisposition
+	authority        domain.PublicationSuccessor
+	comments         []replyCommentWire
+	bodies           []string
+	creates          int
+	status           int
+	commitUnknown    bool
+	threads          []replyHarnessThread
+	graphqlStatus    int
+	graphqlHeader    http.Header
+	graphqlErrors    bool
+	graphqlErr       error
+	graphqlQueries   int
+	graphqlMutations int
+	step             func(string)
+	beforeSend       func()
+	beforeGraphQL    func()
+	tokenErr         error
 	// tokenFor, when set, sees each token request's repository first.
 	tokenFor func(repo string)
 }
@@ -51,6 +66,9 @@ func (b replyTestBoundary) Token(ctx context.Context, repo string) (Installation
 	}
 	if ctx.Err() != nil {
 		return InstallationToken{}, ctx.Err()
+	}
+	if b.h.tokenErr != nil {
+		return InstallationToken{}, b.h.tokenErr
 	}
 	return InstallationToken{Token: Secret("reply-fixture-token")}, nil
 }
@@ -74,7 +92,93 @@ func (b replyTestBoundary) RoundTrip(req *http.Request) (*http.Response, error) 
 		return nil, req.Context().Err()
 	}
 	w := httptest.NewRecorder()
-	if req.Method == http.MethodGet {
+	if req.Method == http.MethodPost && req.URL.Path == "/graphql" {
+		if h.beforeGraphQL != nil {
+			h.beforeGraphQL()
+		}
+		if h.graphqlErr != nil {
+			return nil, h.graphqlErr
+		}
+		var gql struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&gql); err != nil {
+			h.t.Fatal(err)
+		}
+		isMutation := strings.Contains(gql.Query, "resolveReviewThread")
+		if isMutation {
+			h.graphqlMutations++
+		} else {
+			h.graphqlQueries++
+		}
+		for k, vals := range h.graphqlHeader {
+			for _, v := range vals {
+				w.Header().Add(k, v)
+			}
+		}
+		status := h.graphqlStatus
+		if status == 0 {
+			status = http.StatusOK
+		}
+		w.WriteHeader(status)
+		if status == http.StatusOK {
+			switch {
+			case h.graphqlErrors:
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"errors": []map[string]any{{"message": "reply-fixture-token graphql error"}},
+				})
+			case isMutation:
+				id, _ := gql.Variables["id"].(string)
+				var matched *replyHarnessThread
+				for i := range h.threads {
+					if h.threads[i].id == id {
+						h.threads[i].isResolved = true
+						matched = &h.threads[i]
+						break
+					}
+				}
+				if matched == nil {
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"data": map[string]any{"resolveReviewThread": map[string]any{"thread": nil}},
+					})
+				} else {
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"data": map[string]any{
+							"resolveReviewThread": map[string]any{
+								"thread": map[string]any{"id": matched.id, "isResolved": matched.isResolved},
+							},
+						},
+					})
+				}
+			default:
+				nodes := make([]map[string]any, 0, len(h.threads))
+				for _, th := range h.threads {
+					nodes = append(nodes, map[string]any{
+						"id":         th.id,
+						"isResolved": th.isResolved,
+						"comments": map[string]any{
+							"nodes": []map[string]any{{"fullDatabaseId": fmt.Sprintf("%d", th.root)}},
+						},
+					})
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{
+						"repository": map[string]any{
+							"nameWithOwner": h.f.binding.Repo,
+							"pullRequest": map[string]any{
+								"number": h.f.binding.PRNumber,
+								"reviewThreads": map[string]any{
+									"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+									"nodes":    nodes,
+								},
+							},
+						},
+					},
+				})
+			}
+		}
+	} else if req.Method == http.MethodGet {
 		_ = json.NewEncoder(w).Encode(h.comments)
 	} else {
 		if h.beforeSend != nil {
@@ -225,6 +329,13 @@ func newReplyHarnessForBinding(t *testing.T, f replyBindingFixture, thread, seco
 func newReplyHarnessDecided(t *testing.T, f replyBindingFixture, thread, secondThread string, disposition domain.ReviewDisposition, reason string, byPerson bool) *replyHarness {
 	t.Helper()
 	h := &replyHarness{t: t, f: f, now: time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC), comments: []replyCommentWire{}}
+	if parsed, err := parseExternalReplyThread(thread); err == nil && parsed.root > 0 {
+		h.threads = append(h.threads, replyHarnessThread{id: fmt.Sprintf("PRRT_%d", parsed.root), root: parsed.root})
+	}
+	if parsed, err := parseExternalReplyThread(secondThread); err == nil && parsed.root > 0 &&
+		(len(h.threads) == 0 || h.threads[0].root != parsed.root) {
+		h.threads = append(h.threads, replyHarnessThread{id: fmt.Sprintf("PRRT_%d", parsed.root), root: parsed.root})
+	}
 	prior := h.review(1, h.f.binding.HeadSHA)
 	profile := h.profile(true)
 	finding, err := domain.NewExternalFinding(domain.ExternalFindingInput{
@@ -1087,6 +1198,453 @@ func TestExternalReviewReplierRun(t *testing.T) {
 		}
 		if h.creates != 1 {
 			t.Fatalf("creates = %d", h.creates)
+		}
+	})
+}
+
+func (h *replyHarness) resolution() (externalReviewThreadResolution, bool) {
+	h.t.Helper()
+	return h.resolutionFor(h.d)
+}
+
+func (h *replyHarness) resolutionFor(d domain.ExternalFindingDisposition) (externalReviewThreadResolution, bool) {
+	h.t.Helper()
+	var res externalReviewThreadResolution
+	var found bool
+	h.read(func(tx *store.ReadTx) error {
+		row, err := tx.GetOutbox(context.Background(), externalReplyKey(d.FindingID, d.Round)+"/resolve")
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		res, err = decodeExternalReviewThreadResolution(row)
+		found = err == nil
+		return err
+	})
+	return res, found
+}
+
+func TestExternalReviewReplierResolvesDeclinedAndDeferredOnce(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name            string
+		disposition     domain.ReviewDisposition
+		alreadyResolved bool
+		wantMutations   int
+	}{
+		{name: "declined", disposition: domain.ReviewDispositionDeclined, wantMutations: 1},
+		{name: "deferred", disposition: domain.ReviewDispositionDeferred, wantMutations: 1},
+		{name: "already resolved", disposition: domain.ReviewDispositionDeclined, alreadyResolved: true, wantMutations: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newReplyHarness(t, "review_comment/43", tc.disposition, "Already checked.")
+			h.threads[0].isResolved = tc.alreadyResolved
+			h.pass() // open reply intent
+			h.pass() // send reply and record outcome
+			if h.graphqlQueries != 0 || h.graphqlMutations != 0 {
+				t.Fatalf("unexpected GraphQL before resolution pass: queries=%d mutations=%d", h.graphqlQueries, h.graphqlMutations)
+			}
+			h.pass() // resolve thread
+			if h.graphqlQueries != 1 || h.graphqlMutations != tc.wantMutations || !h.threads[0].isResolved {
+				t.Fatalf("queries=%d mutations=%d resolved=%t", h.graphqlQueries, h.graphqlMutations, h.threads[0].isResolved)
+			}
+			res, found := h.resolution()
+			if !found || res.Code != "" {
+				t.Fatalf("resolution = (%+v, %t), want empty code", res, found)
+			}
+			// Reopening on GitHub or restarting must not trigger another GraphQL call.
+			h.threads[0].isResolved = false
+			h.pass()
+			h.restart()
+			h.pass()
+			if h.graphqlQueries != 1 || h.graphqlMutations != tc.wantMutations {
+				t.Fatalf("re-resolved after restart: queries=%d mutations=%d", h.graphqlQueries, h.graphqlMutations)
+			}
+			h.read(func(tx *store.ReadTx) error {
+				items, err := tx.ListOpenAttentionItems(context.Background(), domain.AttentionSystemHealth)
+				if err == nil && len(items) != 0 {
+					t.Fatalf("unexpected notices: %+v", items)
+				}
+				row, err := tx.GetOutbox(context.Background(), externalReplyKey(h.d.FindingID, h.d.Round)+"/resolve")
+				if err != nil {
+					return err
+				}
+				digests, err := ExternalReviewThreadResolutionBackupPayloadDigests(row)
+				if err != nil || len(digests) != 0 {
+					t.Fatalf("backup digests = (%v, %v)", digests, err)
+				}
+				row.Kind = "other"
+				if _, err := ExternalReviewThreadResolutionBackupPayloadDigests(row); err == nil {
+					t.Fatal("foreign kind accepted")
+				}
+				return nil
+			})
+		})
+	}
+}
+
+func TestExternalReviewReplierFailedThreadResolutionRaisesOneNotice(t *testing.T) {
+	t.Parallel()
+	h := newReplyHarness(t, "review_comment/43", domain.ReviewDispositionDeclined, "Already checked.")
+	h.pass()
+	h.pass()
+	h.graphqlErrors = true
+	h.pass()
+	res, found := h.resolution()
+	if !found || res.Code != externalReplyThreadUnresolved {
+		t.Fatalf("resolution = (%+v, %t), want %s", res, found, externalReplyThreadUnresolved)
+	}
+	h.pass()
+	h.restart()
+	h.pass()
+	if h.graphqlQueries != 1 || h.graphqlMutations != 0 {
+		t.Fatalf("failed resolution retried: queries=%d mutations=%d", h.graphqlQueries, h.graphqlMutations)
+	}
+	h.read(func(tx *store.ReadTx) error {
+		items, err := tx.ListOpenAttentionItems(context.Background(), domain.AttentionSystemHealth)
+		if err != nil {
+			return err
+		}
+		if len(items) != 1 {
+			t.Fatalf("notices = %d, want 1", len(items))
+		}
+		item := items[0]
+		if item.HealthDiagnostic == nil || item.HealthDiagnostic.Code != externalReplyThreadUnresolved ||
+			item.Posture == nil || *item.Posture != domain.HealthPostureAdvisory ||
+			!slices.Equal(item.RequestedDecision, []domain.Action{domain.ActionAcknowledge}) ||
+			strings.Contains(item.Reason, "reply-fixture-token") {
+			t.Fatalf("notice = %+v", item)
+		}
+		return nil
+	})
+}
+
+func TestExternalReviewReplierRetriesThreadResolutionWithinBound(t *testing.T) {
+	t.Parallel()
+
+	t.Run("three attempt bound with backoff", func(t *testing.T) {
+		h := newReplyHarness(t, "review_comment/43", domain.ReviewDispositionDeclined, "Already checked.")
+		h.pass()
+		h.pass()
+		h.graphqlStatus = http.StatusTooManyRequests
+		h.pass()
+		h.pass()
+		if h.graphqlQueries != 1 {
+			t.Fatalf("retry ignored backoff: queries=%d", h.graphqlQueries)
+		}
+		if _, found := h.resolution(); found {
+			t.Fatal("recorded resolution before attempt bound")
+		}
+		h.now = h.now.Add(time.Minute)
+		h.pass()
+		if h.graphqlQueries != 2 {
+			t.Fatalf("second attempt queries=%d", h.graphqlQueries)
+		}
+		h.now = h.now.Add(time.Minute)
+		h.pass()
+		if h.graphqlQueries != 3 {
+			t.Fatalf("third attempt queries=%d", h.graphqlQueries)
+		}
+		res, found := h.resolution()
+		if !found || res.Code != externalReplyThreadUnresolved {
+			t.Fatalf("resolution = (%+v, %t), want %s", res, found, externalReplyThreadUnresolved)
+		}
+		h.restart()
+		h.pass()
+		if h.graphqlQueries != 3 {
+			t.Fatalf("terminal resolution failure retried after restart: queries=%d", h.graphqlQueries)
+		}
+		h.read(func(tx *store.ReadTx) error {
+			items, err := tx.ListOpenAttentionItems(context.Background(), domain.AttentionSystemHealth)
+			if err == nil && (len(items) != 1 || items[0].HealthDiagnostic.Code != externalReplyThreadUnresolved) {
+				t.Fatalf("notices = %+v", items)
+			}
+			return err
+		})
+	})
+
+	t.Run("token failure and canceled context record nothing", func(t *testing.T) {
+		h := newReplyHarness(t, "review_comment/43", domain.ReviewDispositionDeclined, "Already checked.")
+		h.pass()
+		h.pass()
+
+		h.tokenErr = errors.New("mint failed: reply-fixture-token")
+		err := h.r.Pass(context.Background())
+		if err == nil || strings.Contains(err.Error(), "reply-fixture-token") {
+			t.Fatalf("token error = %v", err)
+		}
+		h.tokenErr = nil
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := h.r.Pass(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled pass = %v", err)
+		}
+		if h.graphqlQueries != 0 || h.graphqlMutations != 0 {
+			t.Fatalf("unexpected GraphQL: queries=%d mutations=%d", h.graphqlQueries, h.graphqlMutations)
+		}
+		if _, found := h.resolution(); found {
+			t.Fatal("recorded resolution after pre-send error")
+		}
+
+		// Later pass resolves normally without having spent any retry attempts.
+		h.pass()
+		if res, found := h.resolution(); !found || res.Code != "" || h.graphqlMutations != 1 {
+			t.Fatalf("later pass failed to resolve: res=(%+v, %t) mutations=%d", res, found, h.graphqlMutations)
+		}
+	})
+}
+
+func TestExternalReviewReplierSkipsThreadResolutionWhereInapplicable(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fixed reply", func(t *testing.T) {
+		h := newReplyHarness(t, "review_comment/43", domain.ReviewDispositionFixed, "Reviewed a remediated head.")
+		h.review(4, h.f.binding.HeadSHA)
+		h.pass()
+		h.pass()
+		h.pass()
+		if h.creates != 1 || h.graphqlQueries != 0 || h.graphqlMutations != 0 {
+			t.Fatalf("creates=%d queries=%d mutations=%d", h.creates, h.graphqlQueries, h.graphqlMutations)
+		}
+	})
+
+	for _, thread := range []string{"review/42", "issue_comment/44"} {
+		t.Run(thread, func(t *testing.T) {
+			h := newReplyHarness(t, thread, domain.ReviewDispositionDeclined, "Already checked.")
+			h.pass()
+			h.pass()
+			h.pass()
+			if h.creates != 1 || h.graphqlQueries != 0 || h.graphqlMutations != 0 {
+				t.Fatalf("creates=%d queries=%d mutations=%d", h.creates, h.graphqlQueries, h.graphqlMutations)
+			}
+		})
+	}
+
+	t.Run("refused reply", func(t *testing.T) {
+		h := newReplyHarness(t, "review_comment/43", domain.ReviewDispositionDeclined, "Already checked.")
+		h.status = http.StatusNotFound
+		h.pass()
+		h.pass()
+		h.pass()
+		if h.outcome().Code != externalReplyRefused || h.graphqlQueries != 0 || h.graphqlMutations != 0 {
+			t.Fatalf("outcome=%+v queries=%d mutations=%d", h.outcome(), h.graphqlQueries, h.graphqlMutations)
+		}
+	})
+
+	t.Run("ambiguous reply", func(t *testing.T) {
+		h := newReplyHarness(t, "review_comment/43", domain.ReviewDispositionDeclined, "Already checked.")
+		h.status = http.StatusInternalServerError
+		h.pass()
+		h.pass()
+		h.now = h.now.Add(11 * time.Minute)
+		h.pass()
+		h.pass()
+		if h.outcome().Code != externalReplyAmbiguous || h.graphqlQueries != 0 || h.graphqlMutations != 0 {
+			t.Fatalf("outcome=%+v queries=%d mutations=%d", h.outcome(), h.graphqlQueries, h.graphqlMutations)
+		}
+	})
+
+	t.Run("revoked reply", func(t *testing.T) {
+		h := newReplyHarness(t, "review_comment/43", domain.ReviewDispositionDeclined, "Already checked.")
+		h.pass()
+		h.profile(false)
+		h.pass()
+		h.profile(true)
+		h.pass()
+		if h.outcome().Code != externalReplyRevoked || h.graphqlQueries != 0 || h.graphqlMutations != 0 {
+			t.Fatalf("outcome=%+v queries=%d mutations=%d", h.outcome(), h.graphqlQueries, h.graphqlMutations)
+		}
+	})
+
+	t.Run("closed run before resolve", func(t *testing.T) {
+		h := newReplyHarness(t, "review_comment/43", domain.ReviewDispositionDeclined, "Already checked.")
+		h.pass()
+		h.pass()
+		closeWorkflowForTest(t, h.f.st, h.f.run.ID, h.now)
+		h.pass()
+		if h.graphqlQueries != 0 || h.graphqlMutations != 0 {
+			t.Fatalf("closed run called GraphQL: queries=%d mutations=%d", h.graphqlQueries, h.graphqlMutations)
+		}
+		if _, found := h.resolution(); found {
+			t.Fatal("closed run recorded resolution")
+		}
+	})
+
+	t.Run("closed run during resolve records nothing", func(t *testing.T) {
+		h := newReplyHarness(t, "review_comment/43", domain.ReviewDispositionDeclined, "Already checked.")
+		h.pass()
+		h.pass()
+		h.graphqlErrors = true
+		closed := false
+		h.beforeGraphQL = func() {
+			if !closed {
+				closed = true
+				closeWorkflowForTest(t, h.f.st, h.f.run.ID, h.now)
+			}
+		}
+		h.pass()
+		if _, found := h.resolution(); found {
+			t.Fatal("closed run wrote resolution row")
+		}
+		h.read(func(tx *store.ReadTx) error {
+			items, err := tx.ListOpenAttentionItems(context.Background(), domain.AttentionSystemHealth)
+			if err == nil && len(items) != 0 {
+				t.Fatalf("closed run raised notices: %+v", items)
+			}
+			return err
+		})
+	})
+
+	t.Run("reviewer no longer admitted", func(t *testing.T) {
+		h := newReplyHarness(t, "review_comment/43", domain.ReviewDispositionDeclined, "Already checked.")
+		h.pass()
+		h.pass()
+		h.profile(false)
+		h.pass()
+		if h.graphqlQueries != 0 || h.graphqlMutations != 0 {
+			t.Fatalf("revoked reviewer called GraphQL: queries=%d mutations=%d", h.graphqlQueries, h.graphqlMutations)
+		}
+		if _, found := h.resolution(); found {
+			t.Fatal("revoked reviewer recorded resolution")
+		}
+	})
+
+	t.Run("contradictory stored intent fails closed", func(t *testing.T) {
+		h := newReplyHarness(t, "review_comment/43", domain.ReviewDispositionDeclined, "Already checked.")
+		h.pass()
+		h.pass()
+		var intent externalReplyIntent
+		h.read(func(tx *store.ReadTx) error {
+			row, err := tx.GetOutbox(context.Background(), externalReplyKey(h.d.FindingID, h.d.Round))
+			if err != nil {
+				return err
+			}
+			intent, err = decodeExternalReplyIntent(row)
+			return err
+		})
+		intent.Thread = "review_comment/999"
+		payload, err := json.Marshal(intent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.f.st.Close(); err != nil {
+			t.Fatal(err)
+		}
+		db, err := sql.Open("sqlite", h.f.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = db.ExecContext(context.Background(), `UPDATE outbox SET payload = ?, payload_digest = ? WHERE idempotency_key = ?`,
+			payload, contentaddr.Sum(payload), externalReplyKey(h.d.FindingID, h.d.Round))
+		closeErr := db.Close()
+		if err != nil || closeErr != nil {
+			t.Fatalf("rewrite intent: %v, %v", err, closeErr)
+		}
+		h.restart()
+		if err := h.r.Pass(context.Background()); err == nil || h.graphqlQueries != 0 || h.graphqlMutations != 0 {
+			t.Fatalf("contradictory intent resolved: err=%v queries=%d mutations=%d", err, h.graphqlQueries, h.graphqlMutations)
+		}
+	})
+}
+
+func TestExternalReviewReplierThreadResolutionRespectsSiblingFindings(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fixed sibling keeps thread open", func(t *testing.T) {
+		h := newReplyHarnessThreads(t, "review_comment/43", "review_comment/43", domain.ReviewDispositionDeclined, "Already checked.")
+		fix := h.review(3, strings.Repeat("b", 40))
+		h.review(4, h.f.binding.HeadSHA)
+		fixedSibling := domain.ExternalFindingDisposition{
+			FindingID:               h.second.FindingID,
+			RunID:                   h.f.run.ID,
+			Round:                   2,
+			Disposition:             domain.ReviewDispositionFixed,
+			Reason:                  "Reviewed a remediated head.",
+			RemediationInvocationID: &fix.InvocationID,
+			CreatedAt:               h.now,
+		}
+		h.write(func(tx *store.WriteTx) error {
+			return tx.PutExternalFindingDisposition(context.Background(), fixedSibling)
+		})
+		// Drive enough passes for both replies to post and for later resolution passes to run.
+		for range 5 {
+			h.pass()
+		}
+		if h.outcome().CommentID == 0 || h.outcome().Code != "" {
+			t.Fatalf("declined outcome = %+v, want posted reply", h.outcome())
+		}
+		if h.creates != 2 || h.graphqlQueries != 0 || h.graphqlMutations != 0 {
+			t.Fatalf("creates=%d queries=%d mutations=%d", h.creates, h.graphqlQueries, h.graphqlMutations)
+		}
+		if _, found := h.resolution(); found {
+			t.Fatal("fixed sibling allowed thread resolution")
+		}
+	})
+
+	t.Run("sibling with no disposition keeps thread open", func(t *testing.T) {
+		h := newReplyHarnessThreads(t, "review_comment/43", "review_comment/43", domain.ReviewDispositionDeclined, "Already checked.")
+		h.pass()
+		h.pass()
+		h.pass()
+		if h.outcome().CommentID == 0 || h.outcome().Code != "" {
+			t.Fatalf("declined outcome = %+v, want posted reply", h.outcome())
+		}
+		if h.graphqlQueries != 0 || h.graphqlMutations != 0 {
+			t.Fatalf("undispositioned sibling allowed GraphQL: queries=%d mutations=%d", h.graphqlQueries, h.graphqlMutations)
+		}
+		if _, found := h.resolution(); found {
+			t.Fatal("undispositioned sibling allowed thread resolution")
+		}
+	})
+
+	t.Run("app reply sibling is ignored", func(t *testing.T) {
+		h := newReplyHarness(t, "review_comment/43", domain.ReviewDispositionDeclined, "Already checked.")
+		// 123 matches the BotUserID returned by replyTestBoundary.Resolve.
+		botReply, err := domain.NewExternalFinding(domain.ExternalFindingInput{
+			RunID: h.f.run.ID, Forge: domain.ExternalReviewForgeGitHub,
+			ReviewerAccountID: 123, ReviewerLogin: "test[bot]", ThreadID: "review_comment/43",
+			HeadSHA: h.f.binding.HeadSHA, Message: "Declined: Already checked.", RawText: "Declined: Already checked.", CreatedAt: h.now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.write(func(tx *store.WriteTx) error { return tx.PutExternalFinding(context.Background(), botReply) })
+		h.pass()
+		h.pass()
+		h.pass()
+		h.pass()
+		if h.graphqlQueries != 1 || h.graphqlMutations != 1 || !h.threads[0].isResolved {
+			t.Fatalf("queries=%d mutations=%d resolved=%t", h.graphqlQueries, h.graphqlMutations, h.threads[0].isResolved)
+		}
+		if res, found := h.resolution(); !found || res.Code != "" {
+			t.Fatalf("resolution = (%+v, %t), want empty code", res, found)
+		}
+	})
+
+	t.Run("two declined siblings resolve once", func(t *testing.T) {
+		h := newReplyHarnessThreads(t, "review_comment/43", "review_comment/43", domain.ReviewDispositionDeclined, "Already checked.")
+		h.write(func(tx *store.WriteTx) error { return tx.PutExternalFindingDisposition(context.Background(), h.second) })
+		// Passes 1-3 open and post both replies; neither resolves before both post.
+		h.pass()
+		h.pass()
+		h.pass()
+		if h.creates != 2 || h.graphqlQueries != 0 || h.graphqlMutations != 0 {
+			t.Fatalf("before both settled: creates=%d queries=%d mutations=%d", h.creates, h.graphqlQueries, h.graphqlMutations)
+		}
+		// Pass 4 resolves on the first sibling and observes already-resolved on the second.
+		h.pass()
+		h.pass()
+		if h.graphqlMutations != 1 || !h.threads[0].isResolved {
+			t.Fatalf("queries=%d mutations=%d resolved=%t", h.graphqlQueries, h.graphqlMutations, h.threads[0].isResolved)
+		}
+		for name, d := range map[string]domain.ExternalFindingDisposition{"first": h.d, "second": h.second} {
+			if res, found := h.resolutionFor(d); !found || res.Code != "" {
+				t.Fatalf("%s resolution = (%+v, %t), want empty code", name, res, found)
+			}
 		}
 	})
 }

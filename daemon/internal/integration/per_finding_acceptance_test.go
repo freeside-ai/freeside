@@ -133,6 +133,9 @@ func TestExternalReviewPerFindingAcceptance(t *testing.T) {
 			if len(replies.bodies) != 1 {
 				t.Fatalf("recorded reply was sent again: %q", replies.bodies)
 			}
+			if replies.graphqlQueries != 1 || replies.graphqlMutations != 1 || !replies.threadResolved {
+				t.Fatalf("thread resolution = queries %d mutations %d resolved %v, want 1, 1, true", replies.graphqlQueries, replies.graphqlMutations, replies.threadResolved)
+			}
 			if prs := p.forge.PullRequests(); len(prs) != 1 || prs[0].Number != pr.Number {
 				t.Fatal("remediation replaced the pull request")
 			}
@@ -173,17 +176,72 @@ func TestExternalReviewBlockingLabelWaitsForPerson(t *testing.T) {
 // Each pass builds its replier on the harness's current store, which a
 // restart replaces.
 type recordedReplies struct {
-	server *httptest.Server
-	bodies []string
+	server           *httptest.Server
+	bodies           []string
+	threadID         string
+	threadResolved   bool
+	graphqlQueries   int
+	graphqlMutations int
 }
 
 func newRecordedReplies(t *testing.T, p *productionPublicationHarness, prNumber int) *recordedReplies {
 	t.Helper()
-	recorded := &recordedReplies{}
+	recorded := &recordedReplies{threadID: "PRRT_1"}
 	recorded.server = httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet {
 			_, _ = w.Write([]byte("[]"))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/graphql" {
+			var gql struct {
+				Query     string         `json:"query"`
+				Variables map[string]any `json:"variables"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&gql); err != nil {
+				t.Errorf("graphql body: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if strings.Contains(gql.Query, "resolveReviewThread") {
+				recorded.graphqlMutations++
+				if id, _ := gql.Variables["id"].(string); id != recorded.threadID {
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"data": map[string]any{"resolveReviewThread": map[string]any{"thread": nil}},
+					})
+					return
+				}
+				recorded.threadResolved = true
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{
+						"resolveReviewThread": map[string]any{
+							"thread": map[string]any{"id": recorded.threadID, "isResolved": recorded.threadResolved},
+						},
+					},
+				})
+				return
+			}
+			recorded.graphqlQueries++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"repository": map[string]any{
+						"nameWithOwner": p.profile.Repo,
+						"pullRequest": map[string]any{
+							"number": prNumber,
+							"reviewThreads": map[string]any{
+								"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+								"nodes": []map[string]any{{
+									"id":         recorded.threadID,
+									"isResolved": recorded.threadResolved,
+									"comments": map[string]any{
+										"nodes": []map[string]any{{"fullDatabaseId": "1"}},
+									},
+								}},
+							},
+						},
+					},
+				},
+			})
 			return
 		}
 		want := fmt.Sprintf("/repos/%s/pulls/%d/comments/1/replies", p.profile.Repo, prNumber)
