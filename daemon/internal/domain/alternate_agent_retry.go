@@ -59,7 +59,7 @@ func QualifyAlternate(cause FailureCause, facts FailureFacts, alt FailureAlterna
 		return AlternateAgentDifferentRoute, facts.Route != "" && alt.Route != "" && alt.Route != facts.Route
 	case FailureCauseProviderUnavailable, FailureCauseInvalidConfiguration, FailureCauseContractContradiction,
 		FailureCauseMemoryLimit, FailureCauseInvalidEvidence, FailureCauseHandoffCheck,
-		FailureCauseExportRejected, FailureCauseUnknown:
+		FailureCauseExportRejected, FailureCauseBaseLeftBranch, FailureCauseUnknown:
 	}
 	return "", false
 }
@@ -380,13 +380,16 @@ func (r AlternateAgentRetry) ParkedMove() bool { return r.ItemID == "" }
 // one more attempt on the same agent, bound to the operator's command
 // (#3440). The outlook must be may_succeed, which an older card without one
 // never is, and the failure must be one a repeat can clear: a loss or
-// cancellation, or a failure the provider caused or nobody typed. A
-// quota, credential, or capacity cause has its own remedy (the quota park,
-// re-enrollment, an alternate agent), so a plain repeat is not offered for
-// it. An implementation retry restarts the run, so it is offered only for
-// the implementer, whose failure lost no reviewed work. The store's attempt
-// gate and the engine's command check call it again on the stored card, so
-// an offer the card made under older rules authorizes nothing.
+// cancellation, a failure the provider caused or nobody typed, or, on an
+// implementation card, a base that left its branch (retrying starts a new
+// run at the branch tip; a specification card gets would_repeat and the
+// outlook check withholds it). A quota, credential, or capacity cause has
+// its own remedy (the quota park, re-enrollment, an alternate agent), so a
+// plain repeat is not offered for it. An implementation retry restarts the
+// run, so it is offered only for the implementer, whose failure lost no
+// reviewed work. The store's attempt gate and the engine's command check
+// call it again on the stored card, so an offer the card made under older
+// rules authorizes nothing.
 func (f ExecutionFailureFacts) OffersSameAgentRetry() bool {
 	if f.RetryOutlook != RetryOutlookMaySucceed {
 		return false
@@ -408,7 +411,8 @@ func (f ExecutionFailureFacts) repeatCanClear() bool {
 	case ExecutionOutcomeLost, ExecutionOutcomeCanceled:
 		return true
 	case ExecutionOutcomeFailed:
-		return f.Cause == FailureCauseProviderUnavailable || f.Cause == FailureCauseUnknown
+		return f.Cause == FailureCauseProviderUnavailable || f.Cause == FailureCauseBaseLeftBranch ||
+			f.Cause == FailureCauseUnknown
 	case ExecutionOutcomeBlocked:
 		return false
 	}

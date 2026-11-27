@@ -109,6 +109,11 @@ func TestDecideFailureDisposition(t *testing.T) {
 			with(otherPool, otherRoute), domain.FailureDispositionAttention,
 		},
 		{
+			// Another agent would seed the same recorded base, so no alternate escapes it.
+			"base left branch with alternates", domain.FailureCauseBaseLeftBranch,
+			with(otherPool, otherRoute), domain.FailureDispositionAttention,
+		},
+		{
 			"unknown", domain.FailureCauseUnknown,
 			with(otherPool, otherRoute), domain.FailureDispositionAttention,
 		},

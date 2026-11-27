@@ -351,7 +351,7 @@ func TestProductionDeliveryRefusalReplayStaysInert(t *testing.T) {
 		t.Fatal("run has no production stage")
 	}
 	if err := f.engine.recordProductionDeliveryRefusal(
-		t.Context(), f.run, stage, f.attempt.InvocationID, "rendered prompt exceeds limit",
+		t.Context(), f.run, stage, f.attempt.InvocationID, "rendered prompt exceeds limit", domain.FailureCauseUnknown,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +374,7 @@ func TestProductionDeliveryRefusalReplayConvergesAfterDelivery(t *testing.T) {
 	}
 	const summary = "rendered prompt exceeds limit"
 	if err := f.engine.recordProductionDeliveryRefusal(
-		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary, domain.FailureCauseUnknown,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestProductionDeliveryRefusalReplayConvergesAfterDelivery(t *testing.T) {
 	}
 	before, _ := f.item(t, f.failureItemID())
 	if err := f.engine.recordProductionDeliveryRefusal(
-		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary, domain.FailureCauseUnknown,
 	); err != nil {
 		t.Fatalf("replayed delivery refusal after a delivery receipt = %v, want nil", err)
 	}
@@ -440,7 +440,7 @@ func TestProductionDeliveryRefusalReplayRefusesItemWithoutAdmittedFacts(t *testi
 		t.Fatalf("seeded item execution_failure = %+v, want facts without admitted", before.ExecutionFailure)
 	}
 	if err := f.engine.recordProductionDeliveryRefusal(
-		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary, domain.FailureCauseUnknown,
 	); !errors.Is(err, domain.ErrImmutableTransition) {
 		t.Fatalf("replayed delivery refusal over an item without admitted facts = %v, want ErrImmutableTransition", err)
 	}
@@ -459,14 +459,14 @@ func TestProductionDeliveryRefusalReplayConvergesAfterProjectRename(t *testing.T
 	}
 	const summary = "rendered prompt exceeds limit"
 	if err := f.engine.recordProductionDeliveryRefusal(
-		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary, domain.FailureCauseUnknown,
 	); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := f.item(t, f.failureItemID())
 	renameRunProject(t, f)
 	if err := f.engine.recordProductionDeliveryRefusal(
-		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary, domain.FailureCauseUnknown,
 	); err != nil {
 		t.Fatalf("replayed delivery refusal after a project rename = %v, want nil", err)
 	}
@@ -486,14 +486,14 @@ func TestProductionDeliveryRefusalReplayConvergesAfterTaskRename(t *testing.T) {
 	}
 	const summary = "rendered prompt exceeds limit"
 	if err := f.engine.recordProductionDeliveryRefusal(
-		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary, domain.FailureCauseUnknown,
 	); err != nil {
 		t.Fatal(err)
 	}
 	renameRunTask(t, f.store, f.run.ID)
 	before, _ := f.item(t, f.failureItemID())
 	if err := f.engine.recordProductionDeliveryRefusal(
-		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary, domain.FailureCauseUnknown,
 	); err != nil {
 		t.Fatalf("replayed delivery refusal after a task rename = %v, want nil", err)
 	}
@@ -548,7 +548,7 @@ func TestProductionDeliveryRefusalReplayFailsClosedOnChangedReason(t *testing.T)
 	before, _ := f.item(t, f.failureItemID())
 	renameRunProject(t, f)
 	err := f.engine.recordProductionDeliveryRefusal(
-		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary, domain.FailureCauseUnknown,
 	)
 	if !errors.Is(err, domain.ErrImmutableTransition) {
 		t.Fatalf("replayed delivery refusal over a changed reason = %v, want ErrImmutableTransition", err)
@@ -1017,5 +1017,31 @@ func TestImplementationRetryNeedsACampaign(t *testing.T) {
 		if got := item.Offers(domain.ActionRetry); got != want {
 			t.Errorf("campaign %q offers retry = %v, want %v", campaign, got, want)
 		}
+	}
+}
+
+// TestProductionBaseLeftBranchOffersRetryInCampaign: an implementer failure
+// with cause base_left_branch keeps outlook may_succeed and offers Retry in a
+// campaign run, because retrying starts a new run at the current tip (#3515).
+func TestProductionBaseLeftBranchOffersRetryInCampaign(t *testing.T) {
+	t.Parallel()
+	f := newFailedImplementationCampaignFixtureScript(t, execfake.StageScript{
+		Outcome: execfake.OutcomeFail,
+		Result: exec.StageResult{
+			Summary: "fetch exact base: base left its branch",
+			Cause:   domain.FailureCauseBaseLeftBranch,
+		},
+	})
+	if _, err := f.engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	item, _ := f.item(t, f.failureItemID())
+	if item.ExecutionFailure == nil ||
+		item.ExecutionFailure.Cause != domain.FailureCauseBaseLeftBranch ||
+		item.ExecutionFailure.RetryOutlook != domain.RetryOutlookMaySucceed {
+		t.Fatalf("execution_failure facts = %+v, want base_left_branch / may_succeed", item.ExecutionFailure)
+	}
+	if !item.Offers(domain.ActionRetry) {
+		t.Fatalf("requested decisions = %v, want %s offered", item.RequestedDecision, domain.ActionRetry)
 	}
 }

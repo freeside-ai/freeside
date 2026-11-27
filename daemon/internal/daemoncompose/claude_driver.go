@@ -636,9 +636,10 @@ func classifyTransportSeedError(err error) error {
 	if err == nil {
 		return err
 	}
-	if errors.Is(err, publish.ErrRemoteMissingBase) ||
-		errors.Is(err, publish.ErrMaterializationRefused) ||
-		isPermanentSeedCredentialError(err) {
+	if errors.Is(err, publish.ErrRemoteMissingBase) {
+		return fmt.Errorf("%w: %w: %w", claude.ErrSeedRefused, claude.ErrSeedBaseLeftBranch, err)
+	}
+	if errors.Is(err, publish.ErrMaterializationRefused) || isPermanentSeedCredentialError(err) {
 		return fmt.Errorf("%w: %w", claude.ErrSeedRefused, err)
 	}
 	var gitErr *publish.TransportGitError

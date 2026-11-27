@@ -837,6 +837,7 @@ import Testing
             .invalid_evidence: "Invalid evidence",
             .handoff_check: "Handoff check refused",
             .export_rejected: "Export rejected",
+            .base_left_branch: "Base left its branch",
             .unknown: "Unknown",
         ]
         #expect(Set(labels.keys) == Set(Components.Schemas.FailureCause.allCases))

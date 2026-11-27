@@ -156,7 +156,7 @@ func (f ExecutionFailureFacts) Validate() error {
 		}
 	}
 	if f.RetryOutlook != "" {
-		if want := DecideRetryOutlook(f.Outcome, f.Cause, f.CheckFailure); f.RetryOutlook != want {
+		if want := DecideRetryOutlook(f.Stage, f.Outcome, f.Cause, f.CheckFailure); f.RetryOutlook != want {
 			return fmt.Errorf("execution failure retry outlook %q, derived %q: %w",
 				f.RetryOutlook, want, ErrCardFactInconsistent)
 		}
@@ -170,9 +170,9 @@ func (f ExecutionFailureFacts) Validate() error {
 type RetryOutlook string
 
 const (
-	// RetryOutlookWouldRepeat: the failure follows from what the run produced
-	// or from configuration, so a retry of the same work would fail the same
-	// way.
+	// RetryOutlookWouldRepeat: the failure follows from what the run produced,
+	// its configuration, or a run binding that a retry of this stage keeps, so
+	// a retry of the same work would fail the same way.
 	RetryOutlookWouldRepeat RetryOutlook = "would_repeat"
 	// RetryOutlookMaySucceed: nothing recorded shows the failure would recur.
 	RetryOutlookMaySucceed RetryOutlook = "may_succeed"
@@ -192,13 +192,19 @@ func (o RetryOutlook) valid() bool {
 }
 
 // DecideRetryOutlook derives whether a same-agent retry could escape a
-// failure. A handoff check that refused the content itself (ward's
-// content-evidence mark) would refuse a retry identically, whatever the
-// outcome. A failure whose cause lies in what the run produced or in its
-// configuration would repeat. A transient, quota, credential, or capacity
-// cause, an unknown one, and a loss or cancellation with no content evidence
-// may succeed: either the condition can clear, or nothing shows it won't.
-func DecideRetryOutlook(outcome ExecutionOutcomeStatus, cause FailureCause, check *HandoffCheckFailure) RetryOutlook {
+// failure from the stage, outcome, cause, and handoff check. A handoff check
+// that refused the content itself (ward's content-evidence mark) would refuse
+// a retry identically, whatever the outcome or stage. A failure whose cause
+// lies in what the run produced or in its configuration would repeat. A run
+// whose recorded base left its branch repeats on a retry that keeps the run
+// (such as a specification retry), but may succeed on an implementation retry,
+// which starts a new run at the branch tip. A transient, quota, credential, or
+// capacity cause, an unknown one, and a loss or cancellation with no content
+// evidence may succeed: either the condition can clear, or nothing shows it
+// won't.
+func DecideRetryOutlook(
+	stage StageName, outcome ExecutionOutcomeStatus, cause FailureCause, check *HandoffCheckFailure,
+) RetryOutlook {
 	if check != nil && check.ContentEvidence {
 		return RetryOutlookWouldRepeat
 	}
@@ -208,6 +214,11 @@ func DecideRetryOutlook(outcome ExecutionOutcomeStatus, cause FailureCause, chec
 	switch cause {
 	case FailureCauseExportRejected, FailureCauseInvalidEvidence, FailureCauseInvalidConfiguration,
 		FailureCauseContractContradiction, FailureCauseMemoryLimit:
+		return RetryOutlookWouldRepeat
+	case FailureCauseBaseLeftBranch:
+		if stage == StageNameImplementation {
+			return RetryOutlookMaySucceed
+		}
 		return RetryOutlookWouldRepeat
 	case FailureCauseQuota, FailureCauseCredentialExpired, FailureCauseCredentialRevoked,
 		FailureCauseServiceCapacity, FailureCauseProviderUnavailable, FailureCauseHandoffCheck,

@@ -92,7 +92,7 @@ func failureFactsOf(
 	facts := &domain.ExecutionFailureFacts{
 		Outcome: outcome.Status, Cause: outcome.Cause, Stage: stage, InvocationID: outcome.InvocationID,
 		Admitted: admitted, CheckFailure: outcome.CheckFailure,
-		RetryOutlook: domain.DecideRetryOutlook(outcome.Status, outcome.Cause, outcome.CheckFailure),
+		RetryOutlook: domain.DecideRetryOutlook(stage, outcome.Status, outcome.Cause, outcome.CheckFailure),
 	}
 	if outcome.Status == domain.ExecutionOutcomeFailed && outcome.Cause == domain.FailureCauseExportRejected {
 		rejection, err := tx.GetExportRejection(ctx, outcome.InvocationID)

@@ -866,10 +866,20 @@ func (d *Driver) StartWithInputs(
 		if !errors.Is(err, ErrUnsupportedStart) {
 			return err
 		}
+		// RenderPrompt includes ProtectedPaths read from the repository's
+		// latest trust profile, which an operator can narrow before retrying,
+		// so a prompt refusal stays untyped (unknown). A startRegistryHosts
+		// refusal reads only the run's immutable policy artifact and
+		// append-only adoptions, so a retry repeats it.
+		var cause domain.FailureCause
+		if promptErr == nil {
+			cause = domain.FailureCauseInvalidConfiguration
+		}
 		in.Phase = phaseCommitted
 		in.Result = &exec.StageResult{
 			InvocationID: id, Status: exec.StatusFailed,
 			Summary: truncateFailureSummary(err.Error()),
+			Cause:   cause,
 		}
 		if promptErr != nil {
 			// Prompt refusals have their own reconstruction gate. Registry

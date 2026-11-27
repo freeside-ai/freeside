@@ -106,7 +106,7 @@ func TestProductionDeliveryRefusalRecordsStandardOutcome(t *testing.T) {
 	}
 	e := &Engine{store: st, signet: signet.NewService(st)}
 	if err := e.recordProductionDeliveryRefusal(
-		ctx, run, run.Stages[0], invocationID, "rendered prompt exceeds limit",
+		ctx, run, run.Stages[0], invocationID, "rendered prompt exceeds limit", domain.FailureCauseUnknown,
 	); err != nil {
 		t.Fatal(err)
 	}

@@ -248,14 +248,30 @@ import Testing
         misplacedFindings.execution_failure?.value1.retry_outlook = nil
         var wrongOutlook = AttentionFixtures.exportRejectedFailure().item
         wrongOutlook.execution_failure?.value1.retry_outlook = .init(value1: .may_succeed)
+        var specBaseLeftMaySucceed = AttentionFixtures.fixture(type: .execution_failure).item
+        specBaseLeftMaySucceed.execution_failure?.value1.stage = .specification
+        specBaseLeftMaySucceed.execution_failure?.value1.cause = .base_left_branch
+        specBaseLeftMaySucceed.execution_failure?.value1.retry_outlook = .init(value1: .may_succeed)
+        var implBaseLeftWouldRepeat = AttentionFixtures.fixture(type: .execution_failure).item
+        implBaseLeftWouldRepeat.execution_failure?.value1.stage = .implementation
+        implBaseLeftWouldRepeat.execution_failure?.value1.cause = .base_left_branch
+        implBaseLeftWouldRepeat.execution_failure?.value1.retry_outlook = .init(value1: .would_repeat)
         for (item, breach) in [
             (checkOnFailure, "execution_failure handoff_check outside a handoff_check failure or a loss"),
             (causeWithoutCheck, "execution_failure handoff_check cause without its check"),
             (misplacedFindings, "execution_failure export_rejection outside an export_rejected failure"),
             (wrongOutlook, "execution_failure retry_outlook disagrees with the failure"),
+            (specBaseLeftMaySucceed, "execution_failure retry_outlook disagrees with the failure"),
+            (implBaseLeftWouldRepeat, "execution_failure retry_outlook disagrees with the failure"),
         ] {
             #expect(MockContractValidation.itemValidityBreach(item) == breach)
         }
+        var specBaseLeftValid = specBaseLeftMaySucceed
+        specBaseLeftValid.execution_failure?.value1.retry_outlook = .init(value1: .would_repeat)
+        var implBaseLeftValid = implBaseLeftWouldRepeat
+        implBaseLeftValid.execution_failure?.value1.retry_outlook = .init(value1: .may_succeed)
+        #expect(MockContractValidation.itemValidityBreach(specBaseLeftValid) == nil)
+        #expect(MockContractValidation.itemValidityBreach(implBaseLeftValid) == nil)
     }
 
     /// The notice rides only a ready item, holds exactly one of an omission

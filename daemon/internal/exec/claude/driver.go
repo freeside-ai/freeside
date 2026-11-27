@@ -15,11 +15,12 @@ import (
 // Compatibility sentinels preserve the existing Claude driver contract while
 // the durable implementation lives in the provider-neutral stage package.
 var (
-	ErrUnsupportedStart  = stage.ErrUnsupportedStart
-	ErrDriverClosed      = stage.ErrDriverClosed
-	ErrSeedRetryable     = stage.ErrSeedRetryable
-	ErrSeedRefused       = stage.ErrSeedRefused
-	ErrRecoveryRetryable = stage.ErrRecoveryRetryable
+	ErrUnsupportedStart   = stage.ErrUnsupportedStart
+	ErrDriverClosed       = stage.ErrDriverClosed
+	ErrSeedRetryable      = stage.ErrSeedRetryable
+	ErrSeedRefused        = stage.ErrSeedRefused
+	ErrSeedBaseLeftBranch = stage.ErrSeedBaseLeftBranch
+	ErrRecoveryRetryable  = stage.ErrRecoveryRetryable
 )
 
 // Driver is the Claude-configured provider-neutral stage driver.

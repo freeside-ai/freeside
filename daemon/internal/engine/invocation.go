@@ -351,7 +351,10 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 				if err := e.endBaseHold(ctx, binding.run.ID); err != nil {
 					return started, err
 				}
-				if err := e.recordSpecificationFailure(ctx, binding.run, request, exec.StatusFailed, err.Error()); err != nil {
+				if err := e.recordSpecificationFailureWithCause(
+					ctx, binding.run, request, exec.StatusFailed, err.Error(),
+					domain.FailureCauseBaseLeftBranch, "",
+				); err != nil {
 					return started, err
 				}
 				continue
@@ -492,14 +495,19 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
 		started += boolCount(startedNow)
 		if err != nil {
-			if runBaseLeftBranch(binding.run, err) {
+			baseLeft := runBaseLeftBranch(binding.run, err)
+			if baseLeft {
 				if holdErr := e.endBaseHold(ctx, binding.run.ID); holdErr != nil {
 					return started, holdErr
 				}
 			}
-			if errors.Is(err, ErrRemediationInputUndeliverable) || runBaseLeftBranch(binding.run, err) {
+			if errors.Is(err, ErrRemediationInputUndeliverable) || baseLeft {
+				cause := domain.FailureCauseUnknown
+				if baseLeft {
+					cause = domain.FailureCauseBaseLeftBranch
+				}
 				if failureErr := e.recordProductionDeliveryRefusal(
-					ctx, binding.run, stage, request.InvocationID, err.Error(),
+					ctx, binding.run, stage, request.InvocationID, err.Error(), cause,
 				); failureErr != nil {
 					return started, failureErr
 				}
@@ -595,14 +603,19 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			namingRuns = append(namingRuns, binding.run)
 		}
 		if err != nil {
-			if runBaseLeftBranch(binding.run, err) {
+			baseLeft := runBaseLeftBranch(binding.run, err)
+			if baseLeft {
 				if holdErr := e.endBaseHold(ctx, binding.run.ID); holdErr != nil {
 					return started, holdErr
 				}
 			}
-			if errors.Is(err, ErrProductionInputUndeliverable) || runBaseLeftBranch(binding.run, err) {
+			if errors.Is(err, ErrProductionInputUndeliverable) || baseLeft {
+				cause := domain.FailureCauseUnknown
+				if baseLeft {
+					cause = domain.FailureCauseBaseLeftBranch
+				}
 				if failureErr := e.recordProductionDeliveryRefusal(
-					ctx, binding.run, stage, request.InvocationID, err.Error(),
+					ctx, binding.run, stage, request.InvocationID, err.Error(), cause,
 				); failureErr != nil {
 					return started, failureErr
 				}
@@ -664,14 +677,19 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
 		started += boolCount(startedNow)
 		if err != nil {
-			if runBaseLeftBranch(binding.run, err) {
+			baseLeft := runBaseLeftBranch(binding.run, err)
+			if baseLeft {
 				if holdErr := e.endBaseHold(ctx, binding.run.ID); holdErr != nil {
 					return started, holdErr
 				}
 			}
-			if errors.Is(err, ErrProductionInputUndeliverable) || runBaseLeftBranch(binding.run, err) {
+			if errors.Is(err, ErrProductionInputUndeliverable) || baseLeft {
+				cause := domain.FailureCauseUnknown
+				if baseLeft {
+					cause = domain.FailureCauseBaseLeftBranch
+				}
 				if failureErr := e.recordProductionDeliveryRefusal(
-					ctx, binding.run, stage, request.InvocationID, err.Error(),
+					ctx, binding.run, stage, request.InvocationID, err.Error(), cause,
 				); failureErr != nil {
 					return started, failureErr
 				}

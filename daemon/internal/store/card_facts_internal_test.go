@@ -804,7 +804,7 @@ func TestAttentionItemReadAuthenticatesFailureDiagnosis(t *testing.T) {
 			facts := &domain.ExecutionFailureFacts{
 				Outcome: outcome.Status, Cause: outcome.Cause, Stage: domain.StageNameImplementation,
 				InvocationID: admission.InvocationID, CheckFailure: outcome.CheckFailure,
-				RetryOutlook: domain.DecideRetryOutlook(outcome.Status, outcome.Cause, outcome.CheckFailure),
+				RetryOutlook: domain.DecideRetryOutlook(domain.StageNameImplementation, outcome.Status, outcome.Cause, outcome.CheckFailure),
 			}
 			if err := st.Write(ctx, func(tx *WriteTx) error {
 				if err := tx.RecordExecutionOutcome(ctx, outcome); err != nil {

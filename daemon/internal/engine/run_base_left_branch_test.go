@@ -3,10 +3,12 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -92,6 +94,13 @@ func TestASpecificationStopsOnlyWhenItsRecordedBaseLeftTheBranch(t *testing.T) {
 	if !attentionItemExists(t, h.fixture.store, failureItem) {
 		t.Fatal("the stopped specification raised no failure item")
 	}
+	noAdmissionItem, _ := h.fixture.item(t, failureItem)
+	if noAdmissionItem.ExecutionFailure != nil {
+		t.Fatalf("no-admission failure card carried facts %+v, want nil", noAdmissionItem.ExecutionFailure)
+	}
+	if slices.Contains(noAdmissionItem.RequestedDecision, domain.ActionRetry) {
+		t.Fatalf("no-admission failure card offered Retry: %v", noAdmissionItem.RequestedDecision)
+	}
 	if hold, found := h.hold(t); found {
 		t.Fatalf("hold = %+v after the stop, want it ended", hold)
 	}
@@ -162,5 +171,84 @@ func TestAProductionAttemptStopsWhenItsRecordedBaseLeftTheBranch(t *testing.T) {
 	}
 	if run := getRun(t, h.fixture.store, runID); attemptRecorded(run, implementationID) {
 		t.Fatal("the stopped attempt was recorded")
+	}
+}
+
+// An already-admitted specification attempt that is re-admitted after a daemon
+// or backend change (readmitStaleAdmission) and then stops because its base
+// left its branch records cause base_left_branch, outlook would_repeat, and
+// offers Discuss and Stop only (no Retry).
+func TestAnAdmittedSpecificationBaseLeftBranchRecordsTypedCauseAndWithholdsRetry(t *testing.T) {
+	t.Parallel()
+	h := newReadmissionFixture(t, func(driver exec.StageDriver) exec.StageDriver {
+		return &failFirstStart{StageDriver: driver}
+	})
+	h.configuration = "B"
+	h.prove(t)
+	h.selectErr = errBaseLeftBranch
+
+	if started := h.dispatch(t); started != 0 {
+		t.Fatalf("started %d at a recorded base off its branch", started)
+	}
+	if !outboxDispatched(t, h.fixture.store, h.invocationID) {
+		t.Fatal("the stopped specification's intent is still pending")
+	}
+	var outcome domain.ExecutionOutcome
+	if err := h.fixture.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		outcome, err = tx.GetExecutionOutcomeRecord(t.Context(), h.invocationID)
+		return err
+	}); err != nil {
+		t.Fatalf("get outcome: %v", err)
+	}
+	if outcome.Status != domain.ExecutionOutcomeFailed || outcome.Cause != domain.FailureCauseBaseLeftBranch {
+		t.Fatalf("outcome = %+v, want failed / base_left_branch", outcome)
+	}
+	card, _ := h.fixture.item(t, specificationFailureItemID(h.invocationID))
+	if card.ExecutionFailure == nil ||
+		card.ExecutionFailure.Cause != domain.FailureCauseBaseLeftBranch ||
+		card.ExecutionFailure.RetryOutlook != domain.RetryOutlookWouldRepeat {
+		t.Fatalf("failure card facts = %+v, want base_left_branch / would_repeat", card.ExecutionFailure)
+	}
+	wantDecisions := []domain.Action{domain.ActionDiscuss, domain.ActionStop}
+	if !slices.Equal(card.RequestedDecision, wantDecisions) {
+		t.Fatalf("requested decisions = %v, want %v", card.RequestedDecision, wantDecisions)
+	}
+}
+
+// A production delivery refusal for a recorded base that left its branch
+// records cause base_left_branch on the outcome and card facts, while keeping
+// the delivery-refusal card's Acknowledge-only surface and no outlook.
+func TestAnAdmittedProductionDeliveryRefusalRecordsBaseLeftBranchCause(t *testing.T) {
+	t.Parallel()
+	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
+	stage, ok := findProductionStage(f.run)
+	if !ok {
+		t.Fatal("run has no production stage")
+	}
+	if err := f.engine.recordProductionDeliveryRefusal(
+		t.Context(), f.run, stage, f.attempt.InvocationID, errBaseLeftBranch.Error(), domain.FailureCauseBaseLeftBranch,
+	); err != nil {
+		t.Fatal(err)
+	}
+	var outcome domain.ExecutionOutcome
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		outcome, err = tx.GetExecutionOutcomeRecord(t.Context(), f.attempt.InvocationID)
+		return err
+	}); err != nil {
+		t.Fatalf("get outcome: %v", err)
+	}
+	if outcome.Cause != domain.FailureCauseBaseLeftBranch {
+		t.Fatalf("outcome cause = %q, want base_left_branch", outcome.Cause)
+	}
+	card, _ := f.item(t, f.failureItemID())
+	if card.ExecutionFailure == nil ||
+		card.ExecutionFailure.Cause != domain.FailureCauseBaseLeftBranch ||
+		card.ExecutionFailure.RetryOutlook != "" {
+		t.Fatalf("card facts = %+v, want base_left_branch with no outlook", card.ExecutionFailure)
+	}
+	if !slices.Equal(card.RequestedDecision, []domain.Action{domain.ActionAcknowledge}) {
+		t.Fatalf("requested decisions = %v, want [acknowledge]", card.RequestedDecision)
 	}
 }

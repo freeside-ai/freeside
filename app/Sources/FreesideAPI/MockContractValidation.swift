@@ -485,6 +485,8 @@ enum MockContractValidation {
         switch cause {
         case .export_rejected, .invalid_evidence, .invalid_configuration, .contract_contradiction, .memory_limit:
             return .would_repeat
+        case .base_left_branch:
+            return failure.stage == .implementation ? .may_succeed : .would_repeat
         case .quota, .credential_expired, .credential_revoked, .service_capacity, .provider_unavailable,
             .handoff_check, .unknown:
             return .may_succeed

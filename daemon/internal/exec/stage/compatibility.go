@@ -18,5 +18,9 @@ var ErrSeedRetryable = errors.New("claude driver seed is retryable")
 // ErrSeedRefused marks a definitive exact-base or credential refusal.
 var ErrSeedRefused = errors.New("claude driver seed was refused")
 
+// ErrSeedBaseLeftBranch marks a seed refused because the requested base is no
+// longer on its base branch. Callers pair it with ErrSeedRefused.
+var ErrSeedBaseLeftBranch = errors.New("claude driver seed base left its branch")
+
 // ErrRecoveryRetryable marks a recovery failure that preserved durable state.
 var ErrRecoveryRetryable = errors.New("claude driver recovery is retryable")

@@ -33,6 +33,17 @@ func TestFailureRetryGate(t *testing.T) {
 	old.RetryOutlook = ""
 	repeats := offering
 	repeats.RetryOutlook = domain.RetryOutlookWouldRepeat
+	specBaseLeft := domain.ExecutionFailureFacts{
+		Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseBaseLeftBranch,
+		Stage: domain.StageNameSpecification, InvocationID: "inv-spec",
+		RetryOutlook: domain.RetryOutlookWouldRepeat,
+	}
+	implBaseLeft := domain.ExecutionFailureFacts{
+		Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseBaseLeftBranch,
+		Stage: domain.StageNameImplementation, InvocationID: "inv-implement",
+		RetryOutlook: domain.RetryOutlookMaySucceed,
+		Admitted:     offering.Admitted,
+	}
 	card := func(facts domain.ExecutionFailureFacts) domain.AttentionItem {
 		return domain.AttentionItem{ID: "item-execution_failure-inv-implement", ExecutionFailure: &facts}
 	}
@@ -61,6 +72,8 @@ func TestFailureRetryGate(t *testing.T) {
 		},
 		{"card without an outlook", domain.Command{CommandID: "c1", Action: domain.ActionRetry}, card(old), true},
 		{"would-repeat card", domain.Command{CommandID: "c1", Action: domain.ActionRetry}, card(repeats), true},
+		{"specification base left branch", domain.Command{CommandID: "c1", Action: domain.ActionRetry}, card(specBaseLeft), true},
+		{"implementer base left branch", domain.Command{CommandID: "c1", Action: domain.ActionRetry}, card(implBaseLeft), false},
 		{"another action", domain.Command{CommandID: "c1 ", Action: domain.ActionStop}, card(old), false},
 	}
 	for _, tc := range cases {
