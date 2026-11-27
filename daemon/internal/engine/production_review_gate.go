@@ -149,7 +149,11 @@ func (w *productionPublicationWorkflow) ensureReviewWorkspace(
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+	parent := filepath.Dir(target)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return "", err
+	}
+	if err := reclaimReviewWorkspaceStaging(parent, id); err != nil {
 		return "", err
 	}
 	// Retain, not move: under the pre-publication review anchor the sealed
@@ -164,12 +168,12 @@ func (w *productionPublicationWorkflow) ensureReviewWorkspace(
 	// The staged materialization finishes before the old directory is removed;
 	// os.Rename cannot replace a non-empty directory. If the process stops in
 	// the resulting absent window, the same guard rebuilds on the next pass.
-	staging, err := os.MkdirTemp(filepath.Dir(target), "staging-")
+	staging, err := claimReviewWorkspaceStaging(parent, id)
 	if err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(staging) //nolint:errcheck // best-effort staging cleanup
-	staged := filepath.Join(staging, "workspace")
+	staged := filepath.Join(staging, reviewWorkspaceStagingWorkspace)
 	if err := w.transport.RetainWorktree(ctx, checkout, staged, headSHA); err != nil {
 		return "", fmt.Errorf("materialize review workspace: %w", err)
 	}
@@ -189,19 +193,23 @@ func (w *productionPublicationWorkflow) removeReviewWorkspace(id domain.Invocati
 	if err != nil {
 		return err
 	}
-	info, err := os.Lstat(target)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
+	targetExists := false
+	if info, err := os.Lstat(target); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refuse to remove unowned review workspace %q: %w",
+				target, domain.ErrPathBoundaryMismatch)
+		}
+		targetExists = true
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refuse to remove unowned review workspace %q: %w",
-			target, domain.ErrPathBoundaryMismatch)
+	if err := reclaimReviewWorkspaceStaging(filepath.Dir(target), id); err != nil {
+		return err
 	}
-	if err := os.RemoveAll(target); err != nil {
-		return fmt.Errorf("remove review workspace %q: %w", target, err)
+	if targetExists {
+		if err := os.RemoveAll(target); err != nil {
+			return fmt.Errorf("remove review workspace %q: %w", target, err)
+		}
 	}
 	return nil
 }
