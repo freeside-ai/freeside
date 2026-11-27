@@ -1,6 +1,7 @@
 import Foundation
 import FreesideAPI
 import Observation
+import OpenAPIRuntime
 
 #if os(iOS)
     import UIKit
@@ -20,16 +21,32 @@ public final class PairingModel {
         case failed(String)
     }
 
+    public enum PreviewState: Equatable, Sendable {
+        /// No code is entered, a preview succeeded, or none has been asked yet.
+        case idle
+        /// A preview for the current code is in flight.
+        case checking
+        /// The daemon answered 403: the code is invalid, expired, or used,
+        /// and the daemon never says which (test 13).
+        case refused
+        /// No response arrived from the daemon.
+        case unreachable
+        /// The daemon answered, but not with valid pairing facts (a status
+        /// other than 200 or 403, or a 200 whose body did not decode).
+        case unexpectedAnswer(statusCode: Int?)
+    }
+
     public var pairingCode: String {
         didSet {
             if !isApplyingPairingCodePrefill {
                 pairingCodeWasEdited = true
             }
-            // Facts belong to one code; a changed code shows none until the
-            // daemon answers for the new one.
+            // Facts and preview state belong to one code; a changed code
+            // clears both until the daemon answers for the new one.
             if Self.canonicalPairingCode(pairingCode) != Self.canonicalPairingCode(oldValue) {
+                previewGeneration &+= 1
                 facts = nil
-                codeRefused = false
+                preview = .idle
             }
         }
     }
@@ -37,13 +54,17 @@ public final class PairingModel {
     public private(set) var phase: PhaseState = .idle
     /// What the current code would join (plan §5.14 pairing facts), as the
     /// daemon last reported it for this code; nil until a preview succeeds
-    /// and again whenever the code changes or the daemon rejects it. Display
-    /// facts only: nothing here is a credential.
+    /// and again whenever the code changes or a preview fails (`refused`,
+    /// `unreachable`, or `unexpectedAnswer`). Display facts only: nothing
+    /// here is a credential.
     public private(set) var facts: Components.Schemas.PairingFacts?
-    /// Whether the daemon refused to preview the current code (403): it is
-    /// invalid, expired, or spent, and the daemon never says which. Cleared
-    /// when the code changes. A preview that failed in transit sets nothing.
-    public private(set) var codeRefused = false
+    /// State of the preview request for the current code: `idle` before a
+    /// preview runs or after facts arrive, `checking` while a preview is in
+    /// flight, `refused` on 403 (invalid, expired, or used, never
+    /// distinguished), `unreachable` when no response arrives, and
+    /// `unexpectedAnswer` on any other status or an undecodable 200. Cleared
+    /// when the code changes.
+    public private(set) var preview: PreviewState = .idle
     /// Get Code's progress, apart from the pairing exchange's `phase`.
     public private(set) var codeRequest: CodeRequestState = .idle
 
@@ -61,6 +82,7 @@ public final class PairingModel {
     private let credentials: any DeviceCredentialStore
     private var isApplyingPairingCodePrefill = false
     private var pairingCodeWasEdited = false
+    private var previewGeneration = 0
 
     public init(
         client: any APIProtocol,
@@ -124,36 +146,64 @@ public final class PairingModel {
     }
 
     /// Asks the daemon what the current code would join, without redeeming
-    /// it. Any rejection or failure clears the facts. A refusal also sets
-    /// `codeRefused`, so the screen can say the code is dead and how to get
-    /// another instead of waiting on a preview that will never come; it
-    /// still can't say why, because the daemon never does (test 13).
+    /// it. Sets `preview` to `.checking` while in flight, then settles to
+    /// `.idle` with `facts` on 200, `.refused` on 403 (the daemon never
+    /// distinguishes unknown, expired, or used; test 13), `.unreachable`
+    /// when no response arrives, or `.unexpectedAnswer` on any other status
+    /// or an undecodable 200. Cancellation or a code edited meanwhile leaves
+    /// the current code's state untouched.
     public func refreshFacts() async {
+        previewGeneration &+= 1
+        let generation = previewGeneration
         let code = Self.canonicalPairingCode(pairingCode)
         guard !code.isEmpty else {
             facts = nil
+            preview = .idle
             return
         }
+        preview = .checking
         let previewed: Components.Schemas.PairingFacts?
-        var refused = false
+        let outcome: PreviewState
         do {
             switch try await client.previewPairing(body: .json(.init(pairing_code: code))) {
             case .ok(let ok):
-                previewed = try ok.body.json
+                do {
+                    previewed = try ok.body.json
+                    outcome = .idle
+                } catch {
+                    previewed = nil
+                    outcome = .unexpectedAnswer(statusCode: 200)
+                }
             case .forbidden:
                 previewed = nil
-                refused = true
-            case .undocumented:
+                outcome = .refused
+            case .undocumented(let status, _):
                 previewed = nil
+                outcome = .unexpectedAnswer(statusCode: status)
             }
         } catch {
+            // OpenAPIRuntime wraps any transport error in ClientError, so unwrap cancellation too.
+            if error is CancellationError
+                || (error as? ClientError)?.underlyingError is CancellationError
+                || Task.isCancelled
+            {
+                return
+            }
             previewed = nil
+            if let clientError = error as? ClientError, let response = clientError.response {
+                // The daemon answered, but the body did not decode.
+                outcome = .unexpectedAnswer(statusCode: response.status.code)
+            } else {
+                outcome = .unreachable
+            }
         }
-        // The answer is for the code that was asked about; a code edited
-        // meanwhile keeps its own (cleared) state.
-        guard Self.canonicalPairingCode(pairingCode) == code else { return }
+        // The answer belongs to the code and request that asked; cancellation
+        // or a code edited meanwhile keeps its own state.
+        guard !Task.isCancelled, generation == previewGeneration,
+            Self.canonicalPairingCode(pairingCode) == code
+        else { return }
         facts = previewed
-        codeRefused = refused
+        preview = outcome
     }
 
     /// Fixed copy for a connection mode (plan §5.14): how this device is
