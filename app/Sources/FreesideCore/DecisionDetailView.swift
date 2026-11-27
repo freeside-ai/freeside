@@ -399,18 +399,18 @@ struct DecisionDetailView: View {
                 case .revision:
                     if let facts = model.proposalFacts {
                         TaskProposalRevisionSheet(facts: facts) { revision in
-                            Task { await model.submitTaskProposalRevision(revision) }
+                            await model.submitTaskProposalRevision(revision)
                         }
                     }
                 case .effectRevision:
                     if let facts = model.effectProposalFacts {
                         EffectProposalRevisionSheet(facts: facts) { revision in
-                            Task { await model.submitEffectProposalRevision(revision) }
+                            await model.submitEffectProposalRevision(revision)
                         }
                     }
                 case .snooze:
                     TaskProposalSnoozeSheet { until in
-                        Task { await model.snooze(until: until) }
+                        await model.snooze(until: until)
                     }
                 }
             }
@@ -4947,12 +4947,13 @@ struct TaskProposalRevisionSheet: View {
     @State private var expectedCostText: String
     @State private var componentCount: Int
     @State private var touchesControlPlane: Bool
+    @State private var isSubmitting = false
     private let originalFacts: Components.Schemas.TaskProposalFactsSnapshot
-    let submit: (Components.Schemas.TaskProposalRevisionInput) -> Void
+    let submit: (Components.Schemas.TaskProposalRevisionInput) async -> Bool
 
     init(
         facts: Components.Schemas.TaskProposalFactsSnapshot,
-        submit: @escaping (Components.Schemas.TaskProposalRevisionInput) -> Void
+        submit: @escaping (Components.Schemas.TaskProposalRevisionInput) async -> Bool
     ) {
         _expectedCostText = State(initialValue: String(facts.expected_cost_units))
         _componentCount = State(initialValue: facts.scope.component_count)
@@ -5001,18 +5002,25 @@ struct TaskProposalRevisionSheet: View {
             // toolbar item; Return and Escape still reach it.
             FreesideSheetActionRow(
                 submitLabel: "Submit",
-                isSubmitEnabled: revision != nil,
-                submit: {
-                    if let revision {
-                        submit(revision)
-                        dismiss()
-                    }
-                },
+                isSubmitEnabled: revision != nil && !isSubmitting,
+                submit: performSubmit,
                 cancel: { dismiss() })
         }
         .background(Color.ground)
         .freesideSheetPresentation()
         .frame(minWidth: 380, minHeight: 280)
+    }
+
+    private func performSubmit() {
+        guard !isSubmitting, let revision else { return }
+        isSubmitting = true
+        Task {
+            let didClaimCommand = await submit(revision)
+            isSubmitting = false
+            if didClaimCommand {
+                dismiss()
+            }
+        }
     }
 
     /// The project-owned revision composition without Form and TextField,
@@ -5083,12 +5091,13 @@ struct EffectProposalRevisionSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var resolves: Bool
+    @State private var isSubmitting = false
     private let originalFacts: Components.Schemas.EffectProposalFactsSnapshot
-    let submit: (Components.Schemas.EffectProposalRevisionInput) -> Void
+    let submit: (Components.Schemas.EffectProposalRevisionInput) async -> Bool
 
     init(
         facts: Components.Schemas.EffectProposalFactsSnapshot,
-        submit: @escaping (Components.Schemas.EffectProposalRevisionInput) -> Void
+        submit: @escaping (Components.Schemas.EffectProposalRevisionInput) async -> Bool
     ) {
         _resolves = State(initialValue: facts.source_issue_closure?.value1.resolves ?? false)
         originalFacts = facts
@@ -5125,18 +5134,25 @@ struct EffectProposalRevisionSheet: View {
             // unchanged revision.
             FreesideSheetActionRow(
                 submitLabel: "Approve",
-                isSubmitEnabled: revision != nil,
-                submit: {
-                    if let revision {
-                        submit(revision)
-                        dismiss()
-                    }
-                },
+                isSubmitEnabled: revision != nil && !isSubmitting,
+                submit: performSubmit,
                 cancel: { dismiss() })
         }
         .background(Color.ground)
         .freesideSheetPresentation()
         .frame(minWidth: 380, minHeight: 220)
+    }
+
+    private func performSubmit() {
+        guard !isSubmitting, let revision else { return }
+        isSubmitting = true
+        Task {
+            let didClaimCommand = await submit(revision)
+            isSubmitting = false
+            if didClaimCommand {
+                dismiss()
+            }
+        }
     }
 
     /// The project-owned composition without the AppKit-backed Toggle, which
@@ -5182,14 +5198,15 @@ struct TaskProposalSnoozeSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var until: Date
+    @State private var isSubmitting = false
     private let now: Date
     private let screenshotTimeZone: TimeZone
-    let submit: (Date) -> Void
+    let submit: (Date) async -> Bool
 
     init(
         now: Date = Date(),
         screenshotTimeZone: TimeZone = .current,
-        submit: @escaping (Date) -> Void
+        submit: @escaping (Date) async -> Bool
     ) {
         self.now = now
         _until = State(initialValue: now.addingTimeInterval(60 * 60))
@@ -5232,17 +5249,26 @@ struct TaskProposalSnoozeSheet: View {
                 // a chosen moment that has since passed is no longer a
                 // snooze. The screenshot composition uses the injected
                 // `now` instead, so its golden stays deterministic.
-                isSubmitEnabled: Self.isValidSnooze(until: until, now: Date()),
-                submit: {
-                    guard Self.isValidSnooze(until: until, now: Date()) else { return }
-                    submit(until)
-                    dismiss()
-                },
+                isSubmitEnabled: Self.isValidSnooze(until: until, now: Date()) && !isSubmitting,
+                submit: performSubmit,
                 cancel: { dismiss() })
         }
         .background(Color.ground)
         .freesideSheetPresentation()
         .frame(minWidth: 380, minHeight: 220)
+    }
+
+    private func performSubmit() {
+        guard !isSubmitting, Self.isValidSnooze(until: until, now: Date()) else { return }
+        let chosenUntil = until
+        isSubmitting = true
+        Task {
+            let didClaimCommand = await submit(chosenUntil)
+            isSubmitting = false
+            if didClaimCommand {
+                dismiss()
+            }
+        }
     }
 
     /// The project-owned snooze composition without Form and DatePicker,
